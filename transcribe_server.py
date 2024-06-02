@@ -19,11 +19,11 @@ import torch
 # If the chunk_id is not found, an empty transcript is returned.
 
 app = Flask(__name__)
-CORS(app)
+CORS(app, resources={r"/*": {"origins": "*"}})
 
 # model = whisper.load_model("tiny") # 39M
-model = whisper.load_model("base") # 74M
-# model = whisper.load_model("small") # 244M
+# model = whisper.load_model("base") # 74M
+model = whisper.load_model("small") # 244M
 # model = whisper.load_model("medium") # 769M
 # model = whisper.load_model("large") # 1550M
 # model = whisper.load_model("large-v2") # 1550M
@@ -101,6 +101,12 @@ def transcribe():
                 yield f"data: {json.dumps(response_data)}\n\n".encode('utf-8')
             except json.JSONDecodeError:
                 continue
+
+    # Log request details
+    #print(f"Request Headers: {request.headers}")
+    #print(f"Request Method: {request.method}")
+    #print(f"Request Body: {request.get_data()}")
+    
     return Response(stream_with_context(generate_transcript()), content_type='text/event-stream')
 
 @app.route('/get_transcript', methods=['GET'])
@@ -169,4 +175,4 @@ if __name__ == '__main__':
     threading.Thread(target=process_audio).start()
 
     # start the server
-    app.run(debug=True)
+    app.run(host='0.0.0.0', port=5040, debug=True)

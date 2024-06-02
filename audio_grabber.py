@@ -33,6 +33,7 @@ class AudioGrabber:
                                       channels=CHANNELS,
                                       rate=RATE,
                                       input=True,
+                                      input_device_index=2,
                                       frames_per_buffer=CHUNK_SIZE,
                                       stream_callback=self.audio_callback)
         self.buffer = bytearray()
@@ -89,12 +90,13 @@ class AudioGrabber:
             session = requests.Session()
             session.mount('http://', adapter)
             session.mount('https://', adapter)
-            response = session.post('http://localhost:5000/transcribe', json=data)
+            headers = {'Content-Type': 'application/json'}  # Ensure correct header
+            response = session.post('http://localhost:5040/transcribe', json=data)
         
             if response.status_code == 200:
                 print(f'Sent chunk {self.chunk_id} with {len(self.buffer)} bytes')
             else:
-                print(f'Error sending chunk: {response.text}')
+                print(f'Error sending chunk: {response.status_code}:{response.text}')
         except MaxRetryError as e:
             print(f'Error: Maximum retries exceeded. Could not connect to the endpoint.')
         except requests.exceptions.RequestException as e:
