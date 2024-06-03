@@ -27,7 +27,7 @@ limitations under the License.
     let transcriptContainer = document.getElementById('transcript-container');
 
     function getLatestTranscript() {
-      fetch('http://localhost:5040/get_latest_transcript')
+      fetch('http://localhost:5040/get_latest_transcript?sentences=true')
         .then(response => response.json())
         .then(data => {
           const chunkId = data.chunk_id;
