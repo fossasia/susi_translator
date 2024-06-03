@@ -7,26 +7,40 @@ import numpy as np
 import threading
 import queue
 import torch
+import os
+import logging
+
 
 # The /transcribe endpoint expects a stream of JSON objects with base64-encoded audio binaries.
 # Each chunk should have a unique chunk_id.
 # The server processes each chunk and transcribes the audio using Whisper.
-# If the chunk_id is already present in the transcripts dictionary, the server updates
-# the existing transcript by appending the new transcription. Otherwise, it starts a new transcript.
-# The server returns a JSON response with the updated transcript for each chunk.
 
 # The /get_transcript endpoint allows clients to retrieve the current transcript for a given chunk_id.
 # If the chunk_id is not found, an empty transcript is returned.
 
+logging.basicConfig(level=logging.DEBUG)
+script_dir = os.path.dirname(os.path.abspath(__file__))
+
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}})
 
-# model = whisper.load_model("tiny") # 39M
-# model = whisper.load_model("base") # 74M
-model = whisper.load_model("small") # 244M
-# model = whisper.load_model("medium") # 769M
-# model = whisper.load_model("large") # 1550M
-# model = whisper.load_model("large-v2") # 1550M
+# Download a whisper model. If the download using the whisper library is not possible
+# i.e. if you are offline or behind a firewall, you can also use locally stored models.
+# To use a local model, download a model from the links as listed in
+# https://github.com/openai/whisper/blob/main/whisper/__init__.py#L17-L30
+
+#model_name = "tiny"     # 39M
+#model_name = "base"     # 74M
+model_name = "small"    # 244M
+#model_name = "medium"   # 769M
+#model_name = "large-v3" # 1550M
+
+try:
+    model = whisper.load_model(model_name, in_memory=True)
+except Exception as e:
+    # load the model from the local model directory
+    models_path = os.path.join(script_dir, 'models')
+    model = whisper.load_model(model_name, in_memory=True, download_root=models_path)
 
 # In-memory storage for transcripts (you may want to use a database instead)
 transcripts = {}
