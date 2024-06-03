@@ -22,14 +22,11 @@ limitations under the License.
 </head>
 <body>
     <h1>Audio Grabber</h1>
+    <select id="audioInputSelect"></select>
     <button id="startBtn">Start</button>
     <button id="stopBtn" disabled>Stop</button>
 
     <script>
-        const RATE = 16000;
-        const BUFFER_SIZE = 2 * 10 * RATE; // 10 seconds of audio
-        const SILENCE_THRESHOLD = 500;
-
         let audioContext;
         let mediaStream;
         let scriptProcessor;
@@ -37,27 +34,72 @@ limitations under the License.
         let chunkId = Date.now().toString();
         let recording = false;
 
+        const RATE = 16000;
+        const BUFFER_SIZE = 2 * 10 * RATE; // 10 seconds of audio
+        const SILENCE_THRESHOLD = 500;
+
         document.getElementById('startBtn').addEventListener('click', startRecording);
         document.getElementById('stopBtn').addEventListener('click', stopRecording);
 
-        function startRecording() {
+        // Get the list of audio input devices and populate the select element
+        navigator.mediaDevices.enumerateDevices().then(devices => {
+            const audioInputSelect = document.getElementById('audioInputSelect');
+            const desktopOption = document.createElement('option');
+            desktopOption.value = 'desktop';
+            desktopOption.text = 'Desktop Audio';
+            audioInputSelect.appendChild(desktopOption);
+
+            devices.forEach(device => {
+                if (device.kind === 'audioinput') {
+                    const option = document.createElement('option');
+                    option.value = device.deviceId;
+                    option.text = device.label || `Microphone ${audioInputSelect.length + 1}`;
+                    audioInputSelect.appendChild(option);
+                }
+            });
+        });
+
+        async function startRecording() {
+            const selectedDeviceId = document.getElementById('audioInputSelect').value;
+
+            if (selectedDeviceId === 'desktop') {
+                try {
+                    const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+                    const audioTrack = stream.getAudioTracks()[0];
+                    const audioOnlyStream = new MediaStream([audioTrack]);
+                    startStream(audioOnlyStream);
+                } catch (error) {
+                    console.error('Error accessing desktop audio', error);
+                }
+            } else {
+                const constraints = {
+                    audio: {
+                        deviceId: selectedDeviceId ? { exact: selectedDeviceId } : undefined,
+                        sampleRate: RATE,
+                    },
+                };
+
+                navigator.mediaDevices.getUserMedia(constraints)
+                    .then(stream => {
+                        startStream(stream);
+                    })
+                    .catch(error => console.error('Error accessing audio device', error));
+            }
+        }
+
+        function startStream(stream) {
             audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: RATE });
+            mediaStream = stream;
+            const mediaStreamSource = audioContext.createMediaStreamSource(stream);
+            scriptProcessor = audioContext.createScriptProcessor(4096, 1, 1);
 
-            navigator.mediaDevices.getUserMedia({ audio: true })
-                .then(stream => {
-                    mediaStream = stream;
-                    const mediaStreamSource = audioContext.createMediaStreamSource(stream);
-                    scriptProcessor = audioContext.createScriptProcessor(4096, 1, 1);
+            mediaStreamSource.connect(scriptProcessor);
+            scriptProcessor.connect(audioContext.destination);
+            scriptProcessor.onaudioprocess = processAudio;
 
-                    mediaStreamSource.connect(scriptProcessor);
-                    scriptProcessor.connect(audioContext.destination);
-                    scriptProcessor.onaudioprocess = processAudio;
-
-                    recording = true;
-                    document.getElementById('startBtn').disabled = true;
-                    document.getElementById('stopBtn').disabled = false;
-                })
-                .catch(error => console.error('Error accessing microphone', error));
+            recording = true;
+            document.getElementById('startBtn').disabled = true;
+            document.getElementById('stopBtn').disabled = false;
         }
 
         function stopRecording() {
