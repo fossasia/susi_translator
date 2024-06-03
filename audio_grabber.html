@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en">
+<!--
+Copyright [2024] [Michael Peter Christen, mc@yacy.net]
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+   http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+-->
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Audio Grabber</title>
+</head>
+<body>
+    <h1>Audio Grabber</h1>
+    <button id="startBtn">Start</button>
+    <button id="stopBtn" disabled>Stop</button>
+
+    <script>
+        const RATE = 16000;
+        const BUFFER_SIZE = 2 * 10 * RATE; // 10 seconds of audio
+        const SILENCE_THRESHOLD = 500;
+
+        let audioContext;
+        let mediaStream;
+        let scriptProcessor;
+        let buffer = [];
+        let chunkId = Date.now().toString();
+        let recording = false;
+
+        document.getElementById('startBtn').addEventListener('click', startRecording);
+        document.getElementById('stopBtn').addEventListener('click', stopRecording);
+
+        function startRecording() {
+            audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: RATE });
+
+            navigator.mediaDevices.getUserMedia({ audio: true })
+                .then(stream => {
+                    mediaStream = stream;
+                    const mediaStreamSource = audioContext.createMediaStreamSource(stream);
+                    scriptProcessor = audioContext.createScriptProcessor(4096, 1, 1);
+
+                    mediaStreamSource.connect(scriptProcessor);
+                    scriptProcessor.connect(audioContext.destination);
+                    scriptProcessor.onaudioprocess = processAudio;
+
+                    recording = true;
+                    document.getElementById('startBtn').disabled = true;
+                    document.getElementById('stopBtn').disabled = false;
+                })
+                .catch(error => console.error('Error accessing microphone', error));
+        }
+
+        function stopRecording() {
+            recording = false;
+            mediaStream.getTracks().forEach(track => track.stop());
+            scriptProcessor.disconnect();
+            document.getElementById('startBtn').disabled = false;
+            document.getElementById('stopBtn').disabled = true;
+        }
+
+        function processAudio(event) {
+            const audioData = event.inputBuffer.getChannelData(0);
+            if (isSilent(audioData)) {
+                buffer = []; // Reset buffer
+                chunkId = Date.now().toString(); // Get new chunk ID
+            } else {
+                buffer.push(...audioData);
+            }
+
+            if (buffer.length > 0) {
+                sendChunk();
+            }
+
+            if (buffer.length >= BUFFER_SIZE) {
+                buffer = []; // Reset buffer
+                chunkId = Date.now().toString(); // Get new chunk ID
+            }
+        }
+
+        function isSilent(data) {
+            const maxVal = Math.max(...data);
+            return maxVal < SILENCE_THRESHOLD / 32767; // Convert to 16-bit equivalent threshold
+        }
+
+        function sendChunk() {
+            const int16Array = new Int16Array(buffer.map(n => n * 32767));
+            const audioBuffer = new Blob([int16Array.buffer], { type: 'audio/wav' });
+            const reader = new FileReader();
+            reader.readAsDataURL(audioBuffer);
+            reader.onloadend = () => {
+                const base64data = reader.result.split(',')[1];
+                const data = { chunk_id: chunkId, audio_b64: base64data };
+
+                fetch('http://localhost:5040/transcribe', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(data)
+                })
+                    .then(response => {
+                        if (response.ok) {
+                            console.log(`Sent chunk ${chunkId} with ${buffer.length} samples`);
+                        } else {
+                            console.error(`Error sending chunk: ${response.status}:${response.statusText}`);
+                        }
+                    })
+                    .catch(error => console.error('Error sending chunk:', error));
+            };
+        }
+    </script>
+</body>
+</html>

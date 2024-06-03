@@ -25,6 +25,7 @@ AUDIO_FORMAT = pyaudio.paInt16
 CHANNELS = 1
 BUFFER_SIZE = 2 * 10 * RATE  # 10 seconds of audio
 SILENCE_THRESHOLD = 500
+INPUT_DEVICE_INDEX = 1
 
 class AudioGrabber:
     def __init__(self):
@@ -33,7 +34,7 @@ class AudioGrabber:
                                       channels=CHANNELS,
                                       rate=RATE,
                                       input=True,
-                                      input_device_index=2,
+                                      input_device_index=INPUT_DEVICE_INDEX,
                                       frames_per_buffer=CHUNK_SIZE,
                                       stream_callback=self.audio_callback)
         self.buffer = bytearray()
