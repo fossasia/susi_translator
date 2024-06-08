@@ -19,8 +19,8 @@ import time
 # The /get_transcript endpoint allows clients to retrieve the current transcript for a given chunk_id.
 # If the chunk_id is not found, an empty transcript is returned.
 
-logging.basicConfig(level=logging.DEBUG)
-script_dir = os.path.dirname(os.path.abspath(__file__))
+logging.basicConfig(level=logging.DEBUG, format='%(asctime)s %(levelname)s: %(message)s')
+logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}})
@@ -30,11 +30,12 @@ CORS(app, resources={r"/*": {"origins": "*"}})
 # To use a local model, download a model from the links as listed in
 # https://github.com/openai/whisper/blob/main/whisper/__init__.py#L17-L30
 
-#model_name = "tiny"     # 39M
-#model_name = "base"     # 74M
-model_name = "small"    # 244M
-#model_name = "medium"   # 769M
-#model_name = "large-v3" # 1550M
+#model_name = os.getenv('WHISPER_MODEL', 'tiny')     # 39M
+#model_name = os.getenv('WHISPER_MODEL', 'base')     # 74M
+model_name = os.getenv('WHISPER_MODEL', 'small')    # 244M
+#model_name = os.getenv('WHISPER_MODEL', 'medium')   # 769M
+#model_name = os.getenv('WHISPER_MODEL', 'large-v3') # 1550M
+script_dir = os.path.dirname(os.path.abspath(__file__))
 
 # load model and set mac GPU as device
 try:
@@ -53,70 +54,86 @@ audio_stack = queue.Queue() # is this a fifo queue? yes, it is, a FILO queue wou
 def process_audio():
     while True:
         audiob64, chunk_id = audio_stack.get()
-        print("queue length: " + str(audio_stack.qsize()))
+        logger.debug(f"Queue length: {audio_stack.qsize()}")
         # Skip forward in the stack until we find the last entry with the same chunk_id
-        while True:
-            try:
-                next_audiob64, next_chunk_id = audio_stack.queue[0] # peek at the first element
-                if next_chunk_id != chunk_id:
+        try:
+            while True:
+                try:
+                    next_audiob64, next_chunk_id = audio_stack.queue[0] # peek at the first element
+                    if next_chunk_id != chunk_id: break
+                    audiob64 = next_audiob64
+                    audio_stack.get_nowait() # at least one element is in the queue
+                except IndexError:
                     break
-                audiob64 = next_audiob64
-                audio_stack.get_nowait() # at least one element is in the queue
-            except IndexError:
-                break
 
-        # Convert audio bytes to a writable NumPy array
-        audio_data = base64.b64decode(audiob64)
+            # Convert audio bytes to a writable NumPy array
+            audio_data = base64.b64decode(audiob64)
 
-        # Convert audio bytes to a writable NumPy array with int16 dtype
-        audio_array = np.frombuffer(audio_data, dtype=np.int16)
+            # Convert audio bytes to a writable NumPy array with int16 dtype
+            audio_array = np.frombuffer(audio_data, dtype=np.int16)
+                
+            # Convert int16 to float32 and normalize
+            audio_array = audio_array.astype(np.float32) / 32768.0
+                
+            # Ensure the array is not empty
+            if audio_array.size == 0:
+                logger.warning(f"Invalid audio data for chunk_id {chunk_id}")
+                continue
+                
+            # Ensure no NaN values in audio array
+            if np.isnan(audio_array).any():
+                logger.warning(f"NaN values in audio array for chunk_id {chunk_id}")
+                continue
+
+            # Convert to PyTorch tensor
+            audio_tensor = torch.from_numpy(audio_array)
+
+            # Transcribe the audio data using the Whisper model
+            #print("start to transcribe ...")
+
+            # measure the time it takes to transcribe
+            #start_time = time.time()
+            # transcribe
+            result = model.transcribe(audio_tensor, temperature=0)
+            #print("... finished transcribe")
+            #print(f"transcribe time: {time.time() - start_time}")
             
-        # Convert int16 to float32 and normalize
-        audio_array = audio_array.astype(np.float32) / 32768.0
+            transcript = result['text'].strip()
+            if is_valid(transcript):
+                logger.info(f"VALID transcript for chunk_id {chunk_id}: {transcript}")
+                with threading.Lock():  # Ensure thread-safe access to shared resources
+                    # we must distinguish between the case where the chunk_id is already in the transcripts
+                    # this can happen quite often because the client will generate a new chunk_id only when
+                    # the recorded audio has silence. So all chunks are those pieces with speech without a pause.
+
+                    # get the current transcript for the chunk_id
+                    current_transcript = transcripts.get(chunk_id, None)
+                    # if the current transcript is not None, we append the new transcript to the current one
+                    if current_transcript:
+                        # here we do NOT append the new transcript to the current one becuase it is transcripted
+                        # from the same audio data that has been transcripted before.
+                        # The audio was appended by the client!
+                        # We just overwrite the current transcript with the new one.
+                        current_transcript['transcript'] = transcript
+                    else:
+                        # if the current transcript is None, we create a new entry with the new transcript
+                        transcripts[chunk_id] = {'transcript': transcript} 
+            else:
+                logger.warning(f"INVALID transcript for chunk_id {chunk_id}: {transcript}")
             
-        # Ensure the array is not empty
-        if audio_array.size == 0:
-            print(f"Empty audio array for chunk_id {chunk_id}")
-            raise ValueError("Empty audio array")
-            
-        # Ensure no NaN values in audio array
-        if np.isnan(audio_array).any():
-            print(f"NaN values in audio array for chunk_id {chunk_id}")
-            raise ValueError("NaN values in audio array")
-
-        # Convert to PyTorch tensor
-        audio_tensor = torch.from_numpy(audio_array)
-
-        # Transcribe the audio data using the Whisper model
-        #print("start to transcribe ...")
-
-        # measure the time it takes to transcribe
-        #start_time = time.time()
-        # transcribe
-        result = model.transcribe(audio_tensor, temperature=0)
-        #print("... finished transcribe")
-        #print(f"transcribe time: {time.time() - start_time}")
-        
-        transcript = result['text']
-        if is_valid(transcript):
-            print(f"VALID transcript for chunk_id {chunk_id}: {transcript}")
-            with threading.Lock():  # Ensure thread-safe access to shared resources
-                if chunk_id in transcripts:
-                    transcripts[chunk_id]['transcript'] = transcript
-                else:
-                    transcripts[chunk_id] = {'transcript': transcript}
-        else:
-            print(f"INVALID transcript for chunk_id {chunk_id}: {transcript}")
-        
-        # clean old transcripts
-        clean_old_transcripts()
+            # clean old transcripts
+            clean_old_transcripts()
 
         # Mark the task as done
-        audio_stack.task_done()
+        except Exception as e:
+            logger.error(f"Error processing audio chunk {chunk_id}", exc_info=True)
+        finally:
+            audio_stack.task_done()
 
 def is_valid(transcript):
-    # Check for at least one ASCII character with a code < 128
-    has_ascii_char = any(ord(char) < 128 for char in transcript)
+    # Check for at least one ASCII character with a code < 128 and code > 32 (we omit space in this case)
+    # has_ascii_char = any(ord(char) < 128 and ord(char) > 32 for char in transcript) 
+    has_ascii_char = any(ord(char) < 128 for char in transcript) 
     
     # Check for forbidden words (case insensitive)
     forbidden_words = {"thank", "you", "yeah"}
@@ -129,8 +146,10 @@ def is_valid(transcript):
 def clean_old_transcripts():
     current_time = int(time.time() * 1000)  # Current time in milliseconds
     two_hours_ago = current_time - (2 * 60 * 60 * 1000)  # Two hours ago in milliseconds
-    to_delete = [chunk_id for chunk_id in transcripts.keys() if int(chunk_id) < two_hours_ago]
-    for chunk_id in to_delete: del transcripts[chunk_id]
+    with threading.Lock():
+        to_delete = [chunk_id for chunk_id in transcripts if int(chunk_id) < two_hours_ago]
+        for chunk_id in to_delete:
+            del transcripts[chunk_id]
 
 def merge_and_split_transcripts(transcripts):
 
@@ -194,6 +213,7 @@ def transcribe():
                 #print("received chunk " + chunk_id + " with " + str(len(audio_b64)) + " bytes")
                 yield f"data: {json.dumps(response_data)}\n\n".encode('utf-8')
             except json.JSONDecodeError:
+                logger.error("JSON decode error", exc_info=True)
                 continue
 
     # Log request details
@@ -201,6 +221,8 @@ def transcribe():
     #print(f"Request Method: {request.method}")
     #print(f"Request Body: {request.get_data()}")
     
+    logger.info(f"Received transcribe request")
+    #logger.info(f"Received transcribe request with headers: {request.headers}")
     return Response(stream_with_context(generate_transcript()), content_type='text/event-stream')
 
 @app.route('/get_transcript', methods=['GET'])
