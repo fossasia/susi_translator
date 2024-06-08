@@ -16,18 +16,56 @@ See the License for the specific language governing permissions and
 limitations under the License.
 -->
 <head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Transcript Display</title>
+  <style>
+    body {
+      margin: 0;
+    }
+    #header {
+      padding: 10px;
+      box-sizing: border-box;
+    }
+    #transcript-container {
+      overflow-y: auto;
+      border: 1px solid #ccc;
+      padding: 10px;
+      box-sizing: border-box;
+    }
+  </style>
 </head>
 <body>
   <h1>Transcript Display</h1>
+  <div id="header">
+    <input type="text" id="serverhost" placeholder="Transcribe Host" value="localhost">
+    <input type="text" id="serverport" placeholder="Transcribe Port" value="5040">
+    <button id="newsessionBtn">New Session</button>
+  </div>
   <div id="transcript-container"></div>
 
   <script>
     let latestChunkId = null;
     let transcriptContainer = document.getElementById('transcript-container');
 
+    function adjustTranscriptContainerHeight() {
+      const headerHeight = document.getElementById('header').offsetHeight;
+      const windowHeight = window.innerHeight;
+      transcriptContainer.style.height = (windowHeight - headerHeight - 80) + 'px';
+    }
+
+    document.getElementById('newsessionBtn').addEventListener('click', newSession);
+    async function newSession() {
+      while (transcriptContainer.firstChild) {
+        transcriptContainer.removeChild(transcriptContainer.firstChild);
+      }
+      latestChunkId = null;
+    }
     function getLatestTranscript() {
-      fetch('http://localhost:5040/get_latest_transcript?sentences=true')
+      const serverhost = document.getElementById('serverhost').value;
+      const serverport = document.getElementById('serverport').value;
+      const get_latest_transcript_url = `http://${serverhost}:${serverport}/get_latest_transcript?sentences=true`;
+      fetch(get_latest_transcript_url)
         .then(response => response.json())
         .then(data => {
           const chunkId = data.chunk_id;
@@ -43,9 +81,16 @@ limitations under the License.
             // Same chunk ID, update the existing transcript
             transcriptContainer.lastChild.textContent = transcript;
           }
+
+          // Scroll to the bottom of the transcript container
+          transcriptContainer.scrollTop = transcriptContainer.scrollHeight;
         })
         .catch(error => console.error('Error fetching latest transcript:', error));
     }
+
+    // Adjust transcript container height on load and resize
+    window.addEventListener('load', adjustTranscriptContainerHeight);
+    window.addEventListener('resize', adjustTranscriptContainerHeight);
 
     // Fetch the latest transcript every second
     setInterval(getLatestTranscript, 1000);
