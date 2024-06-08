@@ -19,12 +19,25 @@ limitations under the License.
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Audio Grabber</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            text-align: center;
+        }
+        canvas {
+            border: 1px solid black;
+            margin: 20px auto;
+            display: block;
+        }
+    </style>
 </head>
 <body>
     <h1>Audio Grabber</h1>
     <select id="audioInputSelect"></select>
     <button id="startBtn">Start</button>
     <button id="stopBtn" disabled>Stop</button>
+    <canvas id="spectrogram" width="800" height="50"></canvas>
+    <canvas id="volumeMeter" width="800" height="50"></canvas>
 
     <script>
         let audioContext;
@@ -33,10 +46,16 @@ limitations under the License.
         let buffer = [];
         let chunkId = Date.now().toString();
         let recording = false;
+        let analyser;
 
         const RATE = 16000;
         const BUFFER_SIZE = 2 * 10 * RATE; // 10 seconds of audio
         const SILENCE_THRESHOLD = 500;
+
+        const spectrogramCanvas = document.getElementById('spectrogram');
+        const volumeMeterCanvas = document.getElementById('volumeMeter');
+        const spectrogramCtx = spectrogramCanvas.getContext('2d');
+        const volumeMeterCtx = volumeMeterCanvas.getContext('2d');
 
         document.getElementById('startBtn').addEventListener('click', startRecording);
         document.getElementById('stopBtn').addEventListener('click', stopRecording);
@@ -91,8 +110,11 @@ limitations under the License.
             audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: RATE });
             mediaStream = stream;
             const mediaStreamSource = audioContext.createMediaStreamSource(stream);
+            analyser = audioContext.createAnalyser();
+            analyser.fftSize = 2048;
             scriptProcessor = audioContext.createScriptProcessor(4096, 1, 1);
 
+            mediaStreamSource.connect(analyser);
             mediaStreamSource.connect(scriptProcessor);
             scriptProcessor.connect(audioContext.destination);
             scriptProcessor.onaudioprocess = processAudio;
@@ -100,6 +122,9 @@ limitations under the License.
             recording = true;
             document.getElementById('startBtn').disabled = true;
             document.getElementById('stopBtn').disabled = false;
+
+            drawSpectrogram();
+            drawVolumeMeter();
         }
 
         function stopRecording() {
@@ -157,6 +182,65 @@ limitations under the License.
                     })
                     .catch(error => console.error('Error sending chunk:', error));
             };
+        }
+
+        function getColor(value) {
+            const percent = value / 255;
+            const red = Math.floor(Math.max(0, 255 * (percent - 0.5) * 2));
+            const green = Math.floor(Math.max(0, 255 * (0.5 - Math.abs(percent - 0.5)) * 2));
+            const blue = Math.floor(Math.max(0, 255 * (0.5 - percent) * 2));
+            return `rgb(${red}, ${green}, ${blue})`;
+        }
+
+        function drawSpectrogram() {
+            if (!recording) return;
+
+            const freqData = new Uint8Array(analyser.frequencyBinCount);
+            analyser.getByteFrequencyData(freqData);
+
+            const width = spectrogramCanvas.width;
+            const height = spectrogramCanvas.height;
+
+            // Shift existing image to the left
+            const imageData = spectrogramCtx.getImageData(1, 0, width - 1, height);
+            spectrogramCtx.putImageData(imageData, 0, 0);
+
+            // Draw new frequency data on the right
+            for (let i = 0; i < height; i++) {
+                const value = freqData[i];
+                spectrogramCtx.fillStyle = getColor(value);
+                spectrogramCtx.fillRect(width - 1, height - i, 1, 1);
+            }
+
+            requestAnimationFrame(drawSpectrogram);
+        }
+
+        function drawVolumeMeter() {
+            if (!recording) return;
+
+            const timeData = new Uint8Array(analyser.fftSize);
+            analyser.getByteTimeDomainData(timeData);
+
+            const width = volumeMeterCanvas.width;
+            const height = volumeMeterCanvas.height;
+
+            // Shift existing image to the left
+            const imageData = volumeMeterCtx.getImageData(1, 0, width - 1, height);
+            volumeMeterCtx.putImageData(imageData, 0, 0);
+
+            // Calculate volume
+            const volume = Math.sqrt(timeData.reduce((sum, value) => sum + Math.pow(value - 128, 2), 0) / timeData.length);
+            const volumeHeight = (volume / 32) * height;
+
+            // Clear the volume on the right with blue color
+            volumeMeterCtx.fillStyle = 'grey';
+            volumeMeterCtx.fillRect(width - 1, 0, 1, height);
+
+            // Draw new volume level on the right
+            volumeMeterCtx.fillStyle = 'black';
+            volumeMeterCtx.fillRect(width - 1, height - volumeHeight, 1, volumeHeight);
+
+            requestAnimationFrame(drawVolumeMeter);
         }
     </script>
 </body>
