@@ -241,34 +241,37 @@ def get_first_transcript():
     if len(transcripts) == 0:
         return jsonify({'chunk_id': '-1', 'transcript': ''})
     else:
+        fromid = request.args.get('from', default='0')
         sentences = request.args.get('sentences', default='false') == 'true'
         t = transcripts
         if sentences == 'true': t = merge_and_split_transcripts(transcripts)
-        latest_chunk_id = min(t.keys())
-        latest_transcript = t[latest_chunk_id]['transcript']
-        return jsonify({'chunk_id': latest_chunk_id, 'transcript': latest_transcript})
+        first_chunk_id = next((k for k in sorted(t.keys()) if int(k) >= int(fromid)), None)
+        first_transcript = t[first_chunk_id]['transcript']
+        return jsonify({'chunk_id': first_chunk_id, 'transcript': first_transcript})
 
 @app.route('/pop_first_transcript', methods=['GET'])
 def pop_first_transcript():
     if len(transcripts) == 0:
         return jsonify({'chunk_id': '-1', 'transcript': ''})
     else:
+        fromid = request.args.get('from', default='0')
         sentences = request.args.get('sentences', default='false') == 'true'
         t = transcripts
         if sentences == 'true': t = merge_and_split_transcripts(transcripts)
-        latest_chunk_id = min(t.keys())
-        latest_transcript = t.pop(latest_chunk_id)['transcript']
-        return jsonify({'chunk_id': latest_chunk_id, 'transcript': latest_transcript})
+        first_chunk_id = next((k for k in sorted(t.keys()) if int(k) >= int(fromid)), None)
+        first_transcript = t.pop(first_chunk_id)['transcript']
+        return jsonify({'chunk_id': first_chunk_id, 'transcript': first_transcript})
 
 @app.route('/get_latest_transcript', methods=['GET'])
 def get_latest_transcript():
     if len(transcripts) == 0:
         return jsonify({'chunk_id': '-1', 'transcript': ''})
     else:
+        untilid = request.args.get('until', default=str(int(time.time() * 1000)))
         sentences = request.args.get('sentences', default='false') == 'true'
         t = transcripts
         if sentences == 'true': t = merge_and_split_transcripts(transcripts)
-        latest_chunk_id = max(t.keys())
+        latest_chunk_id = next((k for k in sorted(t.keys(), reverse=True) if int(k) < int(untilid)), None)
         latest_transcript = t[latest_chunk_id]['transcript']
         return jsonify({'chunk_id': latest_chunk_id, 'transcript': latest_transcript})
 
@@ -277,10 +280,11 @@ def pop_latest_transcript():
     if len(transcripts) == 0:
         return jsonify({'chunk_id': '-1', 'transcript': ''})
     else:
+        untilid = request.args.get('until', default=str(int(time.time() * 1000)))
         sentences = request.args.get('sentences', default='false') == 'true'
         t = transcripts
         if sentences == 'true': t = merge_and_split_transcripts(transcripts)
-        latest_chunk_id = max(t.keys())
+        latest_chunk_id = next((k for k in sorted(t.keys(), reverse=True) if int(k) < int(untilid)), None)
         latest_transcript = t.pop(latest_chunk_id)['transcript']
         return jsonify({'chunk_id': latest_chunk_id, 'transcript': latest_transcript})
     
@@ -298,16 +302,22 @@ def delete_transcript():
 
 @app.route('/list_transcripts', methods=['GET'])
 def list_transcripts():
+    fromid = request.args.get('from', default='0')
+    untilid = request.args.get('until', default=str(int(time.time() * 1000)))
     sentences = request.args.get('sentences', default='false') == 'true'
     t = transcripts
     if sentences == 'true': t = merge_and_split_transcripts(transcripts)
+    t = {k: v for k, v in t.items() if int(fromid) <= int(k) <= int(untilid)}
     return jsonify(t)
     
 @app.route('/transcripts_size', methods=['GET'])
 def transcripts_size():
+    fromid = request.args.get('from', default='0')
+    untilid = request.args.get('until', default=str(int(time.time() * 1000)))
     sentences = request.args.get('sentences', default='false') == 'true'
     t = transcripts
     if sentences == 'true': t = merge_and_split_transcripts(transcripts)
+    t = {k: v for k, v in t.items() if int(fromid) <= int(k) <= int(untilid)}
     return jsonify({'size': len(t)})
 
 if __name__ == '__main__':
