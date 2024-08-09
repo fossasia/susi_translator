@@ -11,7 +11,7 @@ client just does the audio recording and another client just does the result dis
 This file contains the server-side logic, which:
 
 - Listens for incoming audio chunks from the client
-- Transcribes the audio chunks using a speech-to-text engine (e.g. Google Cloud Speech-to-Text)
+- Transcribes the audio chunks using whisper
 - Returns the transcribed text to the client
 
 ### audio_grabber.py
