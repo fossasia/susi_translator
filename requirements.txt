@@ -1,5 +1,6 @@
 openai-whisper
 pyaudio
 requests
-flask
-flask_cors
+django
+djangorestframework
+drf-yasg

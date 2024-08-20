@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Custom Prompt Page</title>
+</head>
+<body>
+    <div>
+        <button id="summaryButton">Make Summary</button>
+        <button id="questionsButton">Open Questions</button>
+        <button id="customButton">Custom Prompt</button>
+    </div>
+    <div>
+        <textarea id="textField" rows="10" cols="50"></textarea>
+    </div>
+    <div>
+        <button id="queryOnceButton">Query Once</button>
+        <button id="queryEveryMinuteButton">Query Every Minute</button>
+        <button id="stopLoopButton">Stop Loop</button>
+    </div>
+    <div id="responseField"></div>
+    <script src="js/marked.min.js"></script>
+    <script>
+        document.addEventListener("DOMContentLoaded", function() {
+            let intervalId;
+
+            const buttons = document.querySelectorAll('button');
+            const queryEveryMinuteButton = document.getElementById('queryEveryMinuteButton');
+            const stopLoopButton = document.getElementById('stopLoopButton');
+
+            document.getElementById('summaryButton').addEventListener('click', function() {
+                document.getElementById('textField').value = 'Make a summary of the given text';
+            });
+
+            document.getElementById('questionsButton').addEventListener('click', function() {
+                document.getElementById('textField').value = 'Find all questions which are asked in the given text but have not an answer that can be found in the text';
+            });
+
+            document.getElementById('customButton').addEventListener('click', function() {
+                document.getElementById('textField').value = '';
+            });
+
+            function queryAPI() {
+                const inputText = document.getElementById('textField').value;
+                fetch('http://localhost:5040/list_transcripts?sentences=true')
+                    .then(response => response.json())
+                    .then(data => {
+                        let combinedText = Object.values(data).map(entry => entry.transcript).join(' ') + ' ' + inputText;
+                        fetch('https://llm.susi.ai/v1/chat/completions', {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json',
+                            },
+                            body: JSON.stringify({
+                                model: "llama3:8b",
+                                messages: [{"role": "user", "content": combinedText}],
+                                "temperature": 0.0
+                            })
+                        })
+                        .then(response => response.json())
+                            .then(data => {
+                                fullOutputText = data.choices[0].message.content;
+                            document.getElementById('responseField').innerHTML = `${marked.parse(fullOutputText, { sanitize: true })}`;
+                            document.getElementById('responseField').querySelectorAll('pre code').forEach((block) => {
+                                if (!block.dataset.highlighted) {
+                                    hljs.highlightElement(block);
+                                    block.dataset.highlighted = true;
+                                }
+                            });
+
+                        })
+                        .catch(error => console.error('Error:', error));
+                    })
+                    .catch(error => console.error('Error:', error));
+            }
+
+            document.getElementById('queryOnceButton').addEventListener('click', function() {
+                queryAPI();
+                clearInterval(intervalId);
+            });
+
+            queryEveryMinuteButton.addEventListener('click', function() {
+                queryAPI();
+                clearInterval(intervalId);
+                intervalId = setInterval(queryAPI, 60000);
+
+                buttons.forEach(button => {
+                    if (button !== stopLoopButton && button !== queryEveryMinuteButton) {
+                        button.disabled = true;
+                    }
+                });
+
+                stopLoopButton.style.display = 'inline-block';
+                queryEveryMinuteButton.disabled = true;
+            });
+
+            stopLoopButton.addEventListener('click', function() {
+                clearInterval(intervalId);
+
+                buttons.forEach(button => {
+                    button.disabled = false;
+                });
+
+                stopLoopButton.style.display = 'none';
+            });
+        });
+    </script>
+</body>
+</html>
