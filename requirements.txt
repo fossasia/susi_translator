@@ -4,3 +4,4 @@ requests
 django
 djangorestframework
 drf-yasg
+pybars3
