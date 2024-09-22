@@ -290,6 +290,11 @@ class ServeRootStaticFileView(APIView):
         file_path = os.path.join(settings.STATIC_FILES, file_name)
 
         # Check if the file exists
+        if os.path.exists(file_path + "/") and os.path.isfile(file_path[:-1]):
+            file_path = file_path[:-1]
+        # check if last character is a slash
+        if file_path[-1] == "/" and os.path.isdir(file_path) and os.path.exists(file_path + "index.html"):
+            file_path = file_path + "index.html"
         if not os.path.exists(file_path):
             raise Http404(f"File '{file_name}' not found.")
 

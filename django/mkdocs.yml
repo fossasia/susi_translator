@@ -1,0 +1,7 @@
+site_name: SUSI Translator
+site_url: https://translator.susi.ai
+site_description: Live-Streaming Voice Transcription and Translation
+site_author: Michael Peter Chriten @orbiterlab
+site_dir: static
+repo_url: https://github.com/susiai/susi_translator
+theme: cosmo

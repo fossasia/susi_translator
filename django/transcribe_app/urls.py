@@ -12,5 +12,5 @@ urlpatterns = [
     path('api/delete_transcript', views.DeleteTranscriptView.as_view(), name='delete_transcript'),
     path('api/list_transcripts', views.ListTranscriptsView.as_view(), name='list_transcripts'),
     path('api/transcripts_size', views.TranscriptsSizeView.as_view(), name='transcripts_size'),
-    path('<str:file_name>/', views.ServeRootStaticFileView.as_view(), name='serve_root_static_file'),
+    path('<str:file_name>', views.ServeRootStaticFileView.as_view(), name='serve_root_static_file'),
 ]

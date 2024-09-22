@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Transcript Display</title>
+  <title>Translation Listener</title>
   <style>
     body {
       margin: 0;
@@ -21,11 +21,9 @@
   </style>
 </head>
 <body>
-  <h1>Transcript/Translate Monitor</h1>
+  <h1>Translation Listener</h1>
   <div id="header"></div>
     <input type="text" id="tenant_id" placeholder="Tenant ID" value="0000">
-    <input type="text" id="serverhost" placeholder="Transcribe Host" value="localhost" hidden="hidden">
-    <input type="text" id="serverport" placeholder="Transcribe Port" value="5040" hidden="hidden">
     <button id="newsessionBtn">New Session</button>
   </div>
   <div id="transcript-container"></div>
@@ -55,10 +53,8 @@
 
       pollingInProgress = true;  // Set flag indicating polling has started
 
-      const serverhost = document.getElementById('serverhost').value;
-      const serverport = document.getElementById('serverport').value;
       const tenant_id = document.getElementById('tenant_id').value;
-      let get_latest_transcript_url = `http://${serverhost}:${serverport}/api/get_latest_transcript?tenant_id=${tenant_id}`;
+      let get_latest_transcript_url = `/api/get_latest_transcript?tenant_id=${tenant_id}`;
 
       fetch(get_latest_transcript_url)
         .then(response => response.json())

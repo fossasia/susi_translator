@@ -1,7 +1,10 @@
+django
+django-cors-headers
+djangorestframework
+drf_yasg
+mkdocs
+mkdocs-bootswatch
 openai-whisper
 pyaudio
-requests
-django
-djangorestframework
-drf-yasg
 pybars3
+requests

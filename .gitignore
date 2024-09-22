@@ -3,3 +3,4 @@ models/*.pt
 models/*.bin
 __pycache__
 django/db.sqlite3
+django/static/*

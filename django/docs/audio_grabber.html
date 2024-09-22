@@ -34,8 +34,6 @@ limitations under the License.
 <body>
     <h1>Audio Grabber</h1>
     <input type="text" id="tenant_id" placeholder="Tenant ID" value="0000">
-    <input type="text" id="serverhost" placeholder="Transcribe Host" value="localhost" hidden="hidden">
-    <input type="text" id="serverport" placeholder="Transcribe Port" value="5040" hidden="hidden">
     <select id="audioInputSelect"></select>
     <select id="translate_from">
         <option value="af" >Afrikaans</option>
@@ -398,9 +396,7 @@ limitations under the License.
                 };
 
                 // construct the URL from the host and port
-                const serverhost = document.getElementById('serverhost').value;
-                const serverport = document.getElementById('serverport').value;
-                const transcribeurl = `http://${serverhost}:${serverport}/api/transcribe`;
+                const transcribeurl = `/api/transcribe`;
                 const csrftoken = getCookie('csrftoken');
                 fetch(transcribeurl, {
                     method: 'POST',
