@@ -1,4 +1,8 @@
 # transcribe_app/views.py
+# (C) Michael Peter Christen 2024
+# Licensed under Apache License Version 2.0
+
+
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
@@ -277,7 +281,7 @@ class TranscriptsSizeView(APIView):
         untilid = request.GET.get('until', str(int(time.time() * 1000)))
         transcripts = {k: v for k, v in t.items() if k.isdigit() and int(fromid) <= int(k) <= int(untilid)}
         return Response({'size': len(transcripts)})
-
+    
 @method_decorator(csrf_exempt, name='dispatch')
 class ServeRootStaticFileView(APIView):
     """
@@ -285,7 +289,10 @@ class ServeRootStaticFileView(APIView):
     Optionally apply Handlebars.js-like transformations using PyBars.
     """
 
-    def get(self, request, file_name):
+    def get(self, request, file_name=None):
+        if (not file_name) or (file_name == ''):  # Serve the default file
+            file_name = 'index.html'
+        
         # Path to the static file
         file_path = os.path.join(settings.STATIC_FILES, file_name)
 
@@ -298,26 +305,31 @@ class ServeRootStaticFileView(APIView):
         if not os.path.exists(file_path):
             raise Http404(f"File '{file_name}' not found.")
 
-        with open(file_path, 'r', encoding='utf-8') as f:
-            file_content = f.read()
-
         # Get the content type based on the file extension
         guessed_type, _ = mimetypes.guess_type(file_path)
         
-        # Check if transformation is requested via query param (e.g., /index.html/?transform=true)
-        if request.GET.get('transform', 'false').lower() == 'true':
-            # Apply Handlebars-like transformation
-            context = {
-                "title": "Dynamic Page",
-                "content": "This content was dynamically injected.",
-            }
+        if guessed_type and guessed_type.startswith("text"):
+            # Open and read text files (like .html, .css, .js) in 'r' mode
+            with open(file_path, 'r', encoding='utf-8') as f:
+                file_content = f.read()
+                
+            # Check if transformation is requested via query param (e.g., /index.html/?transform=true)
+            if request.GET.get('transform', 'false').lower() == 'true':
+                # Apply Handlebars-like transformation
+                context = {
+                    "title": "Dynamic Page",
+                    "content": "This content was dynamically injected.",
+                }
 
-            compiler = pybars.Compiler()
-            template = compiler.compile(file_content)
-            transformed_content = template(context)
+                compiler = pybars.Compiler()
+                template = compiler.compile(file_content)
+                file_content = template(context)
+                
+            return HttpResponse(file_content, content_type=guessed_type or 'text/plain')
 
-            # Return transformed content as HTML
-            return HttpResponse(transformed_content, content_type='text/html')
-
-        # Serve the static file as-is
+        # Open and read binary files (like images, fonts) in 'rb' mode
+        with open(file_path, 'rb') as f:
+            file_content = f.read()
         return HttpResponse(file_content, content_type=guessed_type or 'application/octet-stream')
+        
+        

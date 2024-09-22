@@ -1,4 +1,7 @@
 # transcribe_project/settings.py
+# (C) Michael Peter Christen 2024
+# Licensed under Apache License Version 2.0
+
 import os
 from pathlib import Path
 

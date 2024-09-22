@@ -1,4 +1,7 @@
 # transcribe_app/transcribe_utils.py
+# (C) Michael Peter Christen 2024
+# Licensed under Apache License Version 2.0
+
 import os
 import io
 import numpy as np

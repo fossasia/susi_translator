@@ -1,4 +1,7 @@
 # transcribe_project/urls.py
+# (C) Michael Peter Christen 2024
+# Licensed under Apache License Version 2.0
+
 from django.contrib import admin
 from django.urls import path, include
 from rest_framework import permissions

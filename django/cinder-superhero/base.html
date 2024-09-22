@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    {% if config.site_description %}<meta name="description" content="{{ config.site_description }}">{% endif %}
+    {% if config.site_author %}<meta name="author" content="{{ config.site_author }}">{% endif %}
+    {% if page.canonical_url %}<link rel="canonical" href="{{ page.canonical_url }}">{% endif %}
+    <link rel="{{ 'img/favicon.ico'|url }}">
+
+    {% block htmltitle %}
+    <title>{% if page.title %}{{ page.title }} - {% endif %}{{ config.site_name }}</title>
+    {% endblock %}
+
+    <link href="{{ 'css/hack.min.css'|url }}" rel="stylesheet">
+    <link href="{{ 'css/bootstrap-custom.css'|url }}" rel="stylesheet">
+    <link href="{{ 'css/base.css'|url }}" rel="stylesheet">
+    <link href="{{ 'css/cinder.css'|url }}" rel="stylesheet">
+    <link href="{{ 'css/highlight.css'|url }}" rel="stylesheet">
+
+    {%- for path in config['extra_css'] %}
+    <link href="{{ path|url }}" rel="stylesheet">
+    {%- endfor %}
+
+    <!-- HTML5 shim and Respond.js IE8 support of HTML5 elements and media queries -->
+    <!--[if lt IE 9]>
+            <script src="https://cdn.jsdelivr.net/npm/html5shiv@3.7.3/dist/html5shiv.min.js"></script>
+            <script src="https://cdn.jsdelivr.net/npm/respond.js@1.4.2/dest/respond.min.js"></script>
+        <![endif]-->
+
+    {% block extrahead %} {% endblock %}
+</head>
+
+<body{% if page and page.is_homepage %} class="homepage" {% endif %}>
+
+    {% include "nav.html" %}
+
+    <div class="container">
+        {% block content %}
+        {% if page.meta.disable_toc %}
+        <div class="col-md-12" role="main">{% include "content.html" %}</div>
+        {% else %}
+        <div class="col-md-3">{% include "toc.html" %}</div>
+        <div class="col-md-9" role="main">{% include "content.html" %}</div>
+        {% endif %}
+        {% endblock %}
+    </div>
+
+    <footer class="col-md-12 text-center">
+        {% block footer %}
+        <p>{% if config.copyright %}
+        <hr>
+        <small>{{ config.copyright }}<br></small>
+        {% endif %}
+        <!--
+	<small>Documentation built with <a href="http://www.mkdocs.org/">MkDocs</a>.</p></small>
+	-->
+
+        {% if page and page.meta.revision_date %}<br>
+        <small>Revised on: {{ page.meta.revision_date }}</small>
+        {% endif %}
+        {% endblock %}
+    </footer>
+    
+    {%- block scripts %}
+
+
+    <script src="{{ 'js/jquery.min.js'|url }}"></script>
+    <script src="{{ 'js/fontawesome-all.js'|url }}"></script>
+    <script src="{{ 'js/bootstrap.min.js'|url }}"></script>
+    <script src="{{ 'js/highlight.pack.js'|url }}"></script>
+    <script>hljs.initHighlightingOnLoad();</script>
+    <script>var base_url = {{ base_url | tojson }}</script>
+    {% if config.shortcuts %}
+        <script>var shortcuts = {{ config.shortcuts | tojson }}</script>
+    {% endif %}
+    <script src="{{ 'js/base.js'|url }}"></script>
+    {%- for path in config['extra_javascript'] %}
+    <script src="{{ path|url }}"></script>
+    {%- endfor %}
+    {%- endblock %}
+
+    {% if 'search' in config['plugins'] %}{%- include "search-modal.html" %}{% endif %}
+    {%- include "keyboard-modal.html" %}
+    </body>
+
+</html>

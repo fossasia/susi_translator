@@ -4,4 +4,12 @@ site_description: Live-Streaming Voice Transcription and Translation
 site_author: Michael Peter Chriten @orbiterlab
 site_dir: static
 repo_url: https://github.com/susiai/susi_translator
-theme: cosmo
+theme:
+    name: null
+    custom_dir: 'cinder-superhero'
+
+nav:
+  - Home: index.md
+  - Audio Grabber: audio_grabber.md
+  - Listener: listener.md
+  - IFrame: translator_susi_ai_iframe.md
