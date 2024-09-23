@@ -6,7 +6,7 @@ site_dir: static
 repo_url: https://github.com/susiai/susi_translator
 theme:
     name: null
-    custom_dir: 'cinder-superhero'
+    custom_dir: 'orbiter-bootstrap3'
 
 nav:
   - Home: index.md
