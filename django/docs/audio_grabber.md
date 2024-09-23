@@ -1,9 +1,19 @@
 disable_toc: true
 
 <h1>Audio Grabber</h1>
-<input type="text" id="tenant_id" placeholder="Tenant ID" value="0000">
-<select id="audioInputSelect"></select>
-<select id="translate_from">
+<div class="form-group">
+    <label for="tenant_id" class="control-label">Tenant ID</label>
+    <input type="text" id="tenant_id" class="form-control" placeholder="Tenant ID" value="0000">
+</div>
+
+<div class="form-group">
+    <label for="audioInputSelect" class="control-label">Audio Input</label>
+    <select id="audioInputSelect" class="form-control"></select>
+</div>
+
+<div class="form-group">
+    <label for="translate_from" class="control-label">Translate From</label>
+    <select id="translate_from" class="form-control">
     <option value="af" >Afrikaans</option>
     <option value="sq" >Albanian</option>
     <option value="am" >Amharic</option>
@@ -104,8 +114,12 @@ disable_toc: true
     <option value="yi" >Yiddish</option>
     <option value="yo" >Yoruba</option>
     <option value="zu" >Zulu</option>
-</select>
-<select id="translate_to">
+    </select>
+</div>
+
+<div class="form-group">
+    <label for="translate_to" class="control-label">Translate To</label>
+    <select id="translate_to" class="form-control">
     <option value="_" selected>&#60;no translation&#62;</option>
     <option value="af" >Afrikaans</option>
     <option value="sq" >Albanian</option>
@@ -207,11 +221,29 @@ disable_toc: true
     <option value="yi" >Yiddish</option>
     <option value="yo" >Yoruba</option>
     <option value="zu" >Zulu</option>
-</select>
-<button id="startBtn">Start</button>
-<button id="stopBtn" disabled>Stop</button>
-<canvas id="spectrogram" width="800" height="50"></canvas>
-<canvas id="volumeMeter" width="800" height="50"></canvas>
+    </select>
+</div>
+
+<div class="form-group">
+    <button id="startBtn" class="btn btn-success">Start</button>
+    <button id="stopBtn" class="btn btn-danger" disabled>Stop</button>
+</div>
+
+<div class="form-group">
+    <canvas id="spectrogram" class="form-control" style="width: 100%; height: 50px;"></canvas>
+</div>
+<div class="form-group">
+    <canvas id="volumeMeter" class="form-control" style="width: 100%; height: 50px;"></canvas>
+</div>
+
+<div id="recording-message" class="alert alert-info" style="display: none;">
+    Leave this window open to continue the recording.
+</div>
+
+<div id="popup-message" class="alert alert-warning" style="display: none;">
+    Click <button id="popup-link" class="btn btn-primary">this link</button> to open a pop-up window that contains the transcript/translation.
+</div>
+
 
 <script>
     let audioContext;
@@ -254,6 +286,18 @@ disable_toc: true
 
     async function startRecording() {
         const selectedDeviceId = document.getElementById('audioInputSelect').value;
+        const tenantId = document.getElementById('tenant_id').value;
+
+        // Show the messages when recording starts
+        document.getElementById('recording-message').style.display = 'block';
+        document.getElementById('popup-message').style.display = 'block';
+
+        // Add event listener to open the pop-up window        
+        document.getElementById('popup-link').addEventListener('click', function(event) {
+            event.preventDefault();
+            const popupUrl = `/translator_susi_ai_iframe.html?tenant_id=${tenantId}`;
+            window.open(popupUrl, 'TranscriptWindow', 'width=600,height=400');
+        });
 
         if (selectedDeviceId === 'desktop') {
             try {
@@ -440,4 +484,18 @@ disable_toc: true
 
         requestAnimationFrame(drawVolumeMeter);
     }
+
+    function adjustCanvasSize() {
+        const spectrogramCanvas = document.getElementById('spectrogram');
+        const volumeMeterCanvas = document.getElementById('volumeMeter');
+    
+        const containerWidth = document.querySelector('.form-group').offsetWidth;
+    
+        spectrogramCanvas.width = containerWidth;
+        volumeMeterCanvas.width = containerWidth;
+    }
+
+    window.addEventListener('resize', adjustCanvasSize);
+    window.addEventListener('load', adjustCanvasSize);
+
 </script>
