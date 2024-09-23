@@ -6,9 +6,6 @@ body {
      background-repeat:no-repeat;
      background-size: 100%;
 }
-h1, h2 {
-     color: black; !important;
-}
 
 </style>
 

@@ -15,9 +15,8 @@
     {% endblock %}
 
     <link href="{{ 'css/hack.min.css'|url }}" rel="stylesheet">
-    <link href="{{ 'css/bootstrap-custom.css'|url }}" rel="stylesheet">
+    <link href="{{ 'css/bootstrap.min.css'|url }}" rel="stylesheet">
     <link href="{{ 'css/base.css'|url }}" rel="stylesheet">
-    <link href="{{ 'css/cinder.css'|url }}" rel="stylesheet">
     <link href="{{ 'css/highlight.css'|url }}" rel="stylesheet">
 
     {%- for path in config['extra_css'] %}
@@ -82,7 +81,6 @@
     {%- endfor %}
     {%- endblock %}
 
-    {% if 'search' in config['plugins'] %}{%- include "search-modal.html" %}{% endif %}
     {%- include "keyboard-modal.html" %}
     </body>
 
