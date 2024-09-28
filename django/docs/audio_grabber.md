@@ -241,7 +241,9 @@ disable_toc: true
 </div>
 
 <div id="popup-message" class="alert alert-warning" style="display: none;">
-    Click <button id="popup-link" class="btn btn-primary">this link</button> to open a pop-up window that contains the transcript/translation.
+    Click <button id="popup-link" class="btn btn-primary">this link</button> to open a window that contains the transcript/translation.<br>
+    You can use that window as iframe content to present the transcript in your presentation framework.<br>
+    Alternatively copy this link as your iframe URL: <a id="iframe-url" target="_blank"></a>
 </div>
 
 
@@ -292,10 +294,12 @@ disable_toc: true
         document.getElementById('recording-message').style.display = 'block';
         document.getElementById('popup-message').style.display = 'block';
 
-        // Add event listener to open the pop-up window        
+        // Add iframe URL and event listener to open the pop-up window
+        const popupUrl = `/translator_susi_ai_iframe.html?tenant_id=${tenantId}`;
+        document.getElementById('iframe-url').href=popupUrl
+        document.getElementById('iframe-url').innerText=popupUrl
         document.getElementById('popup-link').addEventListener('click', function(event) {
             event.preventDefault();
-            const popupUrl = `/translator_susi_ai_iframe.html?tenant_id=${tenantId}`;
             window.open(popupUrl, 'TranscriptWindow', 'width=600,height=400');
         });
 
