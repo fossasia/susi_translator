@@ -62,155 +62,176 @@ else:
         model_smart = whisper.load_model(model_smart_name, in_memory=True)
 
 # In-memory storage for transcripts
-transcriptd = {} # dictionary of objects; the key is the chunk_id and the value is a dictionary with the chunk_id as key and the transcript as value
-audio_stack = queue.Queue() # is this a fifo queue? yes, it is, a FILO queue would be LifoQueue
+transcriptsd = {} # dictionary of objects; the key is the tenant_id and the value is a dictionary with the chunk_id as key and the transcript as value
+audio_stacks = {} # a dictionary of queues; the key is the tenant_id and the value is the queue, a queue.Queue() object
+
+def add_to_audio_stack(tenant_id, chunk_id, audio_b64, translate_from, translate_to):
+    with threading.Lock():
+        if tenant_id not in audio_stacks:
+            audio_stacks[tenant_id] = queue.Queue()
+        audio_stacks[tenant_id].put((chunk_id, audio_b64, translate_from, translate_to))
+
+def get_transcripts(tenant_id):
+    with threading.Lock():
+        return transcriptsd.get(tenant_id, {})
 
 # Process audio data
 def process_audio():
     while True:
-        tenant_id, chunk_id, audiob64, translate_from, translate_to = audio_stack.get()
-        logger.debug(f"Queue length: {audio_stack.qsize()}")
-        # Skip forward in the stack until we find the last entry with the same chunk_id and the same tenant_id
-        try:
-            # scan through the whole audio_stack to find any other entries with the same chunk_id and tenant_id
-            # in case we find one, we skip the head and take the next one from the head of the queue and scan again
-            while audio_stack.qsize() > 0:
-                foundSameChunk = False
-
+        with threading.Lock():
+            # we iterate over alle tenant_ids in the audio_stacks
+            keys_list = list(audio_stacks.keys())
+            for tenant_id in keys_list:
+                audio_stack = audio_stacks[tenant_id]
+                
+                # empty queues are removed
+                if not audio_stack or audio_stack.empty():
+                    del audio_stacks[tenant_id]
+                    continue
+                
+                chunk_id, audiob64, translate_from, translate_to = audio_stack.get()
+                logger.debug(f"Queue length: {audio_stack.qsize()}")
+                # Skip forward in the stack until we find the last entry with the same chunk_id and the same tenant_id
                 try:
-                    for i in range(audio_stack.qsize()):
-                        next_tenant_id, next_chunk_id, next_audiob64, next_translate_from, next_translate_to = audio_stack.queue[i]
-                        if next_tenant_id == tenant_id and next_chunk_id == chunk_id:
-                            # we found one entry with the same chunk_id and tenant_id which means we skip the head
-                            foundSameChunk = True
-                            break # breaks the for loop
-                    if not foundSameChunk: break # breaks the while loop in case we did NOT found any other entry with the same chunk_id and tenant_id
-                    # now we want to skip the head which means we load another head from the queue
-                    tenant_id, chunk_id, audiob64, translate_from, translate_to = audio_stack.get()
-                except IndexError:
-                    break
+                    # scan through the whole audio_stack to find any other entries with the same chunk_id and tenant_id
+                    # in case we find one, we skip the head and take the next one from the head of the queue and scan again
+                    while audio_stack.qsize() > 0:
+                        foundSameChunk = False
 
-            # Convert audio bytes to a writable NumPy array
-            audio_data = base64.b64decode(audiob64)
+                        try:
+                            for i in range(audio_stack.qsize()):
+                                next_tenant_id, next_chunk_id, next_audiob64, next_translate_from, next_translate_to = audio_stack.queue[i]
+                                if next_tenant_id == tenant_id and next_chunk_id == chunk_id:
+                                    # we found one entry with the same chunk_id and tenant_id which means we skip the head
+                                    foundSameChunk = True
+                                    break # breaks the for loop
+                            if not foundSameChunk: break # breaks the while loop in case we did NOT found any other entry with the same chunk_id and tenant_id
+                            # now we want to skip the head which means we load another head from the queue
+                            tenant_id, chunk_id, audiob64, translate_from, translate_to = audio_stack.get()
+                        except IndexError:
+                            break
 
-            # Convert audio bytes to a writable NumPy array with int16 dtype
-            audio_array = np.frombuffer(audio_data, dtype=np.int16)
-                
-            # Ensure the array is not empty
-            if audio_array.size == 0:
-                logger.warning(f"Invalid audio data for chunk_id {chunk_id}")
-                continue
-                
-            # Ensure no NaN values in audio array
-            if np.isnan(audio_array).any():
-                logger.warning(f"NaN values in audio array for chunk_id {chunk_id}")
-                continue
+                    # Convert audio bytes to a writable NumPy array
+                    audio_data = base64.b64decode(audiob64)
 
-            # Transcribe the audio data using the Whisper model
-            #start_time = time.time()
-            if use_whisper_server:
-                if audio_array.dtype != np.int16:
-                    # Resample the audio to 16kHz and 16-bit format (LEI16@16000)
-                    audio_array = audio_array.astype(np.int16)  # Ensure 16-bit encoding
+                    # Convert audio bytes to a writable NumPy array with int16 dtype
+                    audio_array = np.frombuffer(audio_data, dtype=np.int16)
+                        
+                    # Ensure the array is not empty
+                    if audio_array.size == 0:
+                        logger.warning(f"Invalid audio data for chunk_id {chunk_id}")
+                        continue
+                        
+                    # Ensure no NaN values in audio array
+                    if np.isnan(audio_array).any():
+                        logger.warning(f"NaN values in audio array for chunk_id {chunk_id}")
+                        continue
 
-                # Create a buffer to hold the WAV file in memory
-                wav_buffer = io.BytesIO()
-                sample_rate = 16000
-                wav_write(wav_buffer, sample_rate, audio_array)
-                wav_buffer.seek(0)
+                    # Transcribe the audio data using the Whisper model
+                    #start_time = time.time()
+                    if use_whisper_server:
+                        if audio_array.dtype != np.int16:
+                            # Resample the audio to 16kHz and 16-bit format (LEI16@16000)
+                            audio_array = audio_array.astype(np.int16)  # Ensure 16-bit encoding
 
-                # Prepare the request to the whisper server
-                files = {'file': ('audio.wav', wav_buffer, 'audio/wav')}
-                data = {
-                    'temperature': '0.0',
-                    'temperature_inc': '0.0',
-                    'response_format': 'json',
-                }
-                #response = requests.post(whisper_server, files=files, data=data)
-                response = requests.post(f"{whisper_server}/inference", files=files, data=data)
+                        # Create a buffer to hold the WAV file in memory
+                        wav_buffer = io.BytesIO()
+                        sample_rate = 16000
+                        wav_write(wav_buffer, sample_rate, audio_array)
+                        wav_buffer.seek(0)
 
-                # json response is for example:
-                # {
-                #    "task": "transcribe",
-                #    "language": "english",
-                #    "duration": 2.999812602996826,
-                #    "text": " How can a clam cram in a clean cream can?\n"
-                # }
-                # Check if the response was successful
-                if response.status_code == 200:
-                    # Parse the JSON response
-                    json_response = response.json()
-                    transcript = json_response.get('text', '').strip()
-                else:
-                    print(f"Error: {response.status_code}, {response.text}")
-            else:
-                # Convert int16 to float32 and normalize
-                audio_array = audio_array.astype(np.float32) / 32768.0
-                # Convert to PyTorch tensor
-                audio_tensor = torch.from_numpy(audio_array)
-                result = model_fast.transcribe(audio_tensor, temperature=0)            
-                transcript = result.get('text', '').strip()
-            #print("... finished transcribe")
-            #print(f"transcribe time: {time.time() - start_time}")
-            
-            if is_valid(transcript):
-                logger.info(f"VALID transcript for chunk_id {chunk_id}: {transcript}")
-                with threading.Lock():  # Ensure thread-safe access to shared resources
-                    # we must distinguish between the case where the chunk_id is already in the transcripts
-                    # this can happen quite often because the client will generate a new chunk_id only when
-                    # the recorded audio has silence. So all chunks are those pieces with speech without a pause.
+                        # Prepare the request to the whisper server
+                        files = {'file': ('audio.wav', wav_buffer, 'audio/wav')}
+                        data = {
+                            'temperature': '0.0',
+                            'temperature_inc': '0.0',
+                            'response_format': 'json',
+                        }
+                        #response = requests.post(whisper_server, files=files, data=data)
+                        response = requests.post(f"{whisper_server}/inference", files=files, data=data)
 
-                    # get the current transcripts for the tenant_id
-                    transcripts = transcriptd.get(tenant_id, None)
-                    # if the current transcripts are None, we create a new dictionary for the tenant_id
-                    if not transcripts:
-                        transcripts = {}
-                        transcriptd[tenant_id] = transcripts
+                        # json response is for example:
+                        # {
+                        #    "task": "transcribe",
+                        #    "language": "english",
+                        #    "duration": 2.999812602996826,
+                        #    "text": " How can a clam cram in a clean cream can?\n"
+                        # }
+                        # Check if the response was successful
+                        if response.status_code == 200:
+                            # Parse the JSON response
+                            json_response = response.json()
+                            transcript = json_response.get('text', '').strip()
+                        else:
+                            print(f"Error: {response.status_code}, {response.text}")
+                    else:
+                        # Convert int16 to float32 and normalize
+                        audio_array = audio_array.astype(np.float32) / 32768.0
+                        # Convert to PyTorch tensor
+                        audio_tensor = torch.from_numpy(audio_array)
+                        result = model_fast.transcribe(audio_tensor, temperature=0)            
+                        transcript = result.get('text', '').strip()
+                    #print("... finished transcribe")
+                    #print(f"transcribe time: {time.time() - start_time}")
                     
-                    # check if transcripts has the chunk_id
-                    transcript_event = transcripts.get(chunk_id)
-                    if not transcript_event:
-                        # here is the opportunity to translate the transcript of the latest chunk_id because it will now be fixed and not overwritten again
-                        last_chunk_id1 = list(transcripts.keys())[-1] if len(transcripts) > 0 else None
-                        last_chunk_id2 = list(transcripts.keys())[-2] if len(transcripts) > 1 else None
-                        last_chunk_id3 = list(transcripts.keys())[-3] if len(transcripts) > 2 else None
-                        
-                        # the chunk_id is new and we start a new transcript event
-                        transcript_event = {}
-                        transcripts[chunk_id] = transcript_event
-                        
-                        translation_done = False
-                        if not translation_ongoing and last_chunk_id3:
-                            translation_done = process_translation(transcripts[last_chunk_id3])
+                    if is_valid(transcript):
+                        logger.info(f"VALID transcript for chunk_id {chunk_id}: {transcript}")
+                        with threading.Lock():  # Ensure thread-safe access to shared resources
+                            # we must distinguish between the case where the chunk_id is already in the transcripts
+                            # this can happen quite often because the client will generate a new chunk_id only when
+                            # the recorded audio has silence. So all chunks are those pieces with speech without a pause.
+
+                            # get the current transcripts for the tenant_id
+                            transcripts = transcriptsd.get(tenant_id, None)
+                            # if the current transcripts are None, we create a new dictionary for the tenant_id
+                            if not transcripts:
+                                transcripts = {}
+                                transcriptsd[tenant_id] = transcripts
                             
-                        if not translation_ongoing and not translation_done and last_chunk_id2:
-                            translation_done = process_translation(transcripts[last_chunk_id2])
+                            # check if transcripts has the chunk_id
+                            transcript_event = transcripts.get(chunk_id)
+                            if not transcript_event:
+                                # here is the opportunity to translate the transcript of the latest chunk_id because it will now be fixed and not overwritten again
+                                last_chunk_id1 = list(transcripts.keys())[-1] if len(transcripts) > 0 else None
+                                last_chunk_id2 = list(transcripts.keys())[-2] if len(transcripts) > 1 else None
+                                last_chunk_id3 = list(transcripts.keys())[-3] if len(transcripts) > 2 else None
                                 
-                        if not translation_ongoing and not translation_done and last_chunk_id1:
-                            #process_translation(transcripts[last_chunk_id1])
-                            threading.Thread(target=process_translation, args=(transcripts[last_chunk_id1],)).start()
+                                # the chunk_id is new and we start a new transcript event
+                                transcript_event = {}
+                                transcripts[chunk_id] = transcript_event
+                                
+                                translation_done = False
+                                if not translation_ongoing and last_chunk_id3:
+                                    translation_done = process_translation(transcripts[last_chunk_id3])
+                                    
+                                if not translation_ongoing and not translation_done and last_chunk_id2:
+                                    translation_done = process_translation(transcripts[last_chunk_id2])
+                                        
+                                if not translation_ongoing and not translation_done and last_chunk_id1:
+                                    #process_translation(transcripts[last_chunk_id1])
+                                    threading.Thread(target=process_translation, args=(transcripts[last_chunk_id1],)).start()
+                            
+                            # Overwrite the transcript for this chunk_id
+                            # here we do NOT append the new transcript to the current one becuase it is transcripted
+                            # from the same audio data that has been transcripted before.
+                            # The audio was appended by the client!
+                            # We just overwrite the current transcript with the new one.
+                            transcript_event = transcripts[chunk_id]
+                            transcript_event['translated'] = False
+                            transcript_event['transcript'] = transcript
+                            transcript_event['translate_from'] = translate_from
+                            transcript_event['translate_to'] = translate_to
+                    else:
+                        logger.warning(f"INVALID transcript for chunk_id {chunk_id}: {transcript}")
                     
-                    # Overwrite the transcript for this chunk_id
-                    # here we do NOT append the new transcript to the current one becuase it is transcripted
-                    # from the same audio data that has been transcripted before.
-                    # The audio was appended by the client!
-                    # We just overwrite the current transcript with the new one.
-                    transcript_event = transcripts[chunk_id]
-                    transcript_event['translated'] = False
-                    transcript_event['transcript'] = transcript
-                    transcript_event['translate_from'] = translate_from
-                    transcript_event['translate_to'] = translate_to
-            else:
-                logger.warning(f"INVALID transcript for chunk_id {chunk_id}: {transcript}")
-            
-            # clean old transcripts
-            clean_old_transcripts()
+                    # clean old transcripts
+                    clean_old_transcripts()
 
-        # Mark the task as done
-        except Exception as e:
-            logger.error(f"Error processing audio chunk {chunk_id}", exc_info=True)
-        finally:
-            audio_stack.task_done()
+                # Mark the task as done
+                except Exception as e:
+                    logger.error(f"Error processing audio chunk {chunk_id}", exc_info=True)
+                finally:
+                    audio_stack.task_done()
 
 def process_translation(transcript_event):
     translated = transcript_event.get('translated', False)

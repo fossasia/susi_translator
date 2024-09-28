@@ -9,7 +9,7 @@ from rest_framework import status
 from rest_framework.parsers import JSONParser
 from drf_yasg.utils import swagger_auto_schema
 from drf_yasg import openapi
-from .transcribe_utils import transcriptd, audio_stack, process_audio, merge_and_split_transcripts, translate, logger
+from .transcribe_utils import get_transcripts, add_to_audio_stack, process_audio, merge_and_split_transcripts, translate, logger
 from .serializers import (
     TranscribeInputSerializer,
     TranscribeResponseSerializer,
@@ -57,7 +57,7 @@ class TranscribeView(APIView):
             translate_to = data.get('translate_to', None)
             audio_b64 = data['audio_b64']
             chunk_id = data['chunk_id']
-            audio_stack.put((tenant_id, chunk_id, audio_b64, translate_from, translate_to))
+            add_to_audio_stack(tenant_id, chunk_id, audio_b64, translate_from, translate_to)
             #print("queue length: " + str(audio_stack.qsize()))
             logger.debug(f"Received chunk {chunk_id} with tenant_id {tenant_id}")
             response_data = {'chunk_id': chunk_id, 'tenant_id': tenant_id, 'status': 'processing'}
@@ -83,7 +83,7 @@ class GetTranscriptView(APIView):
         If the chunk_id is not found, an empty transcript is returned.
         """
         tenant_id = request.GET.get('tenant_id', '0000')
-        t = transcriptd.get(tenant_id, {})
+        t = get_transcripts(tenant_id)
         if len(t) == 0:
             return Response({'chunk_id': '-1', 'transcript': ''})
         else:
@@ -111,7 +111,7 @@ class GetFirstTranscriptView(APIView):
         Retrieve the first transcript for a given tenant_id.
         """
         tenant_id = request.GET.get('tenant_id', '0000')
-        t = transcriptd.get(tenant_id, {})
+        t = get_transcripts(tenant_id)
         if len(t) == 0:
             return Response({'chunk_id': '-1', 'transcript': ''})
         else:
@@ -138,7 +138,7 @@ class PopFirstTranscriptView(APIView):
         Retrieve and remove the first transcript for a given tenant_id.
         """
         tenant_id = request.GET.get('tenant_id', '0000')
-        t = transcriptd.get(tenant_id, {})
+        t = get_transcripts(tenant_id)
         if len(t) == 0:
             return Response({'chunk_id': '-1', 'transcript': ''})
         else:
@@ -165,7 +165,7 @@ class GetLatestTranscriptView(APIView):
         Retrieve the latest transcript for a given tenant_id. Optionally translate it into another language.
         """
         tenant_id = request.GET.get('tenant_id', '0000')
-        transcripts = transcriptd.get(tenant_id, {})
+        transcripts = get_transcripts(tenant_id)
         
         if len(transcripts) == 0:
             return Response({})
@@ -199,7 +199,7 @@ class PopLatestTranscriptView(APIView):
         tenant_id = request.GET.get('tenant_id', '0000')
         untilid = request.GET.get('until', str(int(time.time() * 1000)))
         sentences = request.GET.get('sentences', 'false') == 'true'
-        t = transcriptd.get(tenant_id, {})
+        t = get_transcripts(tenant_id)
         if sentences: t = merge_and_split_transcripts(t)
         sorted_keys = sorted(t.keys(), reverse=True)
         latest_chunk_id = next((k for k in sorted_keys if int(k) < int(untilid)), None)
@@ -226,7 +226,7 @@ class DeleteTranscriptView(APIView):
         tenant_id = request.GET.get('tenant_id', '0000')
         chunk_id = request.GET.get('chunk_id')
         sentences = request.GET.get('sentences', 'false') == 'true'
-        t = transcriptd.get(tenant_id, {})
+        t = get_transcripts(tenant_id)
         if sentences: t = merge_and_split_transcripts(t)
         if chunk_id in t:
             entry = t.pop(chunk_id)
@@ -253,7 +253,7 @@ class ListTranscriptsView(APIView):
         fromid = request.GET.get('from', '0')
         untilid = request.GET.get('until', str(int(time.time() * 1000)))
         sentences = request.GET.get('sentences', 'false') == 'true'
-        t = transcriptd.get(tenant_id, {})
+        t = get_transcripts(tenant_id)
         if sentences: t = merge_and_split_transcripts(t)
         transcripts = {k: v for k, v in t.items() if int(fromid) <= int(k) <= int(untilid)}
         return Response({'transcripts': [{'chunk_id': k, 'transcript': v['transcript']} for k, v in transcripts.items()]})
@@ -274,7 +274,7 @@ class TranscriptsSizeView(APIView):
         Get the size of the transcripts for a given tenant_id.
         """
         tenant_id = request.GET.get('tenant_id', '0000')
-        t = transcriptd.get(tenant_id, {})
+        t = get_transcripts(tenant_id)
         sentences = request.GET.get('sentences', 'false') == 'true'
         if sentences: t = merge_and_split_transcripts(t)
         fromid = request.GET.get('from', '0')
