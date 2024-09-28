@@ -29,6 +29,10 @@ model_smart_name = os.getenv('WHISPER_MODEL', 'medium')   # 769M
 translation_cache = {}
 translation_ongoing = False
 
+# In-memory storage for transcripts
+transcriptsd = {} # dictionary of objects; the key is the tenant_id and the value is a dictionary with the chunk_id as key and the transcript as value
+audio_stacks = {} # a dictionary of queues; the key is the tenant_id and the value is the queue, a queue.Queue() object
+
 if use_whisper_server:
     # Use the whisper.cpp server
     # this requires to start the server with the following command:
@@ -61,22 +65,27 @@ else:
     else:
         model_smart = whisper.load_model(model_smart_name, in_memory=True)
 
-# In-memory storage for transcripts
-transcriptsd = {} # dictionary of objects; the key is the tenant_id and the value is a dictionary with the chunk_id as key and the transcript as value
-audio_stacks = {} # a dictionary of queues; the key is the tenant_id and the value is the queue, a queue.Queue() object
-
 def add_to_audio_stack(tenant_id, chunk_id, audio_b64, translate_from, translate_to):
+    """
+    Add an audio chunk to the queue for the given tenant.
+    """
     with threading.Lock():
         if tenant_id not in audio_stacks:
             audio_stacks[tenant_id] = queue.Queue()
         audio_stacks[tenant_id].put((chunk_id, audio_b64, translate_from, translate_to))
 
 def get_transcripts(tenant_id):
+    """
+    Retrieve transcripts for the given tenant.
+    """
     with threading.Lock():
         return transcriptsd.get(tenant_id, {})
 
 # Process audio data
 def process_audio():
+    """
+    Continuously process audio chunks for transcription.
+    """
     while True:
         with threading.Lock():
             # we iterate over alle tenant_ids in the audio_stacks
@@ -89,6 +98,7 @@ def process_audio():
                     del audio_stacks[tenant_id]
                     continue
                 
+                # Get the next audio chunk from the queue
                 chunk_id, audiob64, translate_from, translate_to = audio_stack.get()
                 logger.debug(f"Queue length: {audio_stack.qsize()}")
                 # Skip forward in the stack until we find the last entry with the same chunk_id and the same tenant_id
@@ -96,20 +106,7 @@ def process_audio():
                     # scan through the whole audio_stack to find any other entries with the same chunk_id and tenant_id
                     # in case we find one, we skip the head and take the next one from the head of the queue and scan again
                     while audio_stack.qsize() > 0:
-                        foundSameChunk = False
-
-                        try:
-                            for i in range(audio_stack.qsize()):
-                                next_tenant_id, next_chunk_id, next_audiob64, next_translate_from, next_translate_to = audio_stack.queue[i]
-                                if next_tenant_id == tenant_id and next_chunk_id == chunk_id:
-                                    # we found one entry with the same chunk_id and tenant_id which means we skip the head
-                                    foundSameChunk = True
-                                    break # breaks the for loop
-                            if not foundSameChunk: break # breaks the while loop in case we did NOT found any other entry with the same chunk_id and tenant_id
-                            # now we want to skip the head which means we load another head from the queue
-                            tenant_id, chunk_id, audiob64, translate_from, translate_to = audio_stack.get()
-                        except IndexError:
-                            break
+                        chunk_id, audiob64, translate_from, translate_to = audio_stack.get()
 
                     # Convert audio bytes to a writable NumPy array
                     audio_data = base64.b64decode(audiob64)
@@ -234,6 +231,9 @@ def process_audio():
                     audio_stack.task_done()
 
 def process_translation(transcript_event):
+    """
+    Translate the given transcript event if not already translated.
+    """
     translated = transcript_event.get('translated', False)
     translate_to = transcript_event.get('translate_to', '')
     
@@ -251,6 +251,9 @@ def process_translation(transcript_event):
 
 # Check if the transcript is valid: Contains at least one ASCII character and no forbidden words
 def is_valid(transcript):
+    """
+    Validate the transcript to ensure it meets certain criteria.
+    """
     if not transcript: return False
     transcript_lower = transcript.lower()
     # Check for at least one ASCII character with a code < 128 and code > 32 (we omit space in this case)
@@ -271,21 +274,24 @@ def is_valid(transcript):
 
 # Clean old transcripts: Remove all transcripts older than two hours
 def clean_old_transcripts():
+    """
+    Clean up transcripts that are older than two hours.
+    """
     current_time = int(time.time() * 1000)  # Current time in milliseconds
     two_hours_ago = current_time - (2 * 60 * 60 * 1000)  # Two hours ago in milliseconds
     with threading.Lock():
         # make a list of tenant_ids to delete
         to_delete = []
         # iterate over all dictionaries in transcriptd
-        for tenant_id in transcriptd.keys():
-            transcripts = transcriptd[tenant_id]
-            to_delete = [chunk_id for chunk_id in transcripts if int(chunk_id) < two_hours_ago]
-            for chunk_id in to_delete: del transcripts[chunk_id]
+        for tenant_id in transcriptsd.keys():
+            transcripts = transcriptsd[tenant_id]
+            old_chunks = [chunk_id for chunk_id in transcripts if int(chunk_id) < two_hours_ago]
+            for chunk_id in old_chunks: del transcripts[chunk_id]
             # its possible that the tenant_id has no more transcripts
             if len(transcripts) == 0: to_delete.append(tenant_id)
         
         # delete the tenant_ids
-        for tenant_id in to_delete: transcriptd.pop(tenant_id, None)
+        for tenant_id in to_delete: transcriptsd.pop(tenant_id, None)
 
 def merge_and_split_transcripts(transcripts):
     return transcripts
@@ -402,6 +408,9 @@ def translate_with_llm(text, target_language):
         return None
 
 def translate(text, source_language, target_language):
+    """
+    Translate the given text from source_language to target_language.
+    """
     global translation_ongoing
     # first try to translate from the cache
     cachekey = source_language + ":" + target_language + ":" + text
