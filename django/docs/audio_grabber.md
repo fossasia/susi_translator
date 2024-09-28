@@ -330,7 +330,8 @@ disable_toc: true
         const mediaStreamSource = audioContext.createMediaStreamSource(stream);
         analyser = audioContext.createAnalyser();
         analyser.fftSize = 2048;
-        scriptProcessor = audioContext.createScriptProcessor(4096, 1, 1);
+        //scriptProcessor = audioContext.createScriptProcessor(4096, 1, 1);
+        scriptProcessor = audioContext.createScriptProcessor(8192, 1, 1);
 
         mediaStreamSource.connect(analyser);
         mediaStreamSource.connect(scriptProcessor);

@@ -173,7 +173,7 @@ def process_audio():
                         # here is the opportunity to translate the transcript of the latest chunk_id because it will now be fixed and not overwritten again
                         last_chunk_id1 = list(transcripts.keys())[-1] if len(transcripts) > 0 else None
                         last_chunk_id2 = list(transcripts.keys())[-2] if len(transcripts) > 1 else None
-                        last_chunk_id3 = list(transcripts.keys())[-3] if len(transcripts) > 3 else None
+                        last_chunk_id3 = list(transcripts.keys())[-3] if len(transcripts) > 2 else None
                         
                         # the chunk_id is new and we start a new transcript event
                         transcript_event = {}
@@ -239,7 +239,7 @@ def is_valid(transcript):
     # Check for forbidden words (case insensitive)
     forbidden_phrases = {"thank you", "bye!", "thanks for watching", "click, click", "click click", "cough cough", "뉴", "스", "김", "수", "근", "입", "니", "다"}
     contains_forbidden_phrases = any(word in transcript_lower for word in forbidden_phrases)
-    forbidden_strings = {"eh.", "you", "bye.", "it's fine"}
+    forbidden_strings = {"eh.", "bye.", "it's fine"}
     is_forbidden_string = any(word == transcript_lower for word in forbidden_strings)
 
     # check if the transcript has words which are longer than 40 characters
@@ -398,11 +398,13 @@ def translate(text, source_language, target_language):
             "text": text,
         }
 
+        t0 = time.time()
         response = requests.post(m2m_endpoint, headers=headers, json=data)
         response.raise_for_status()
         json_response = response.json()
         translation_text = json_response.get('translation', '')
         if translation_text:
+            logger.info(f"Translation took {time.time() - t0} seconds")
             translation_cache[cachekey] = translation_text
             translation_ongoing = False
             return translation_text
