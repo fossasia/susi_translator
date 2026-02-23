@@ -140,32 +140,12 @@ limitations under the License.
             document.getElementById('stopBtn').disabled = true;
         }
 
-        let silenceCount = 0;
-        const SILENCE_FRAMES = 4; // ~1 second of sustained silence before cutting a sentence
-
         function processAudio(event) {
             const audioData = event.inputBuffer.getChannelData(0);
-
-            // Calculate max absolute amplitude
-            let maxVal = 0;
-            for (let i = 0; i < audioData.length; i++) {
-                let val = Math.abs(audioData[i]);
-                if (val > maxVal) maxVal = val;
-            }
-
-            if (maxVal < (SILENCE_THRESHOLD / 32767)) {
-                silenceCount++;
+            if (isSilent(audioData)) {
+                buffer = []; // Reset buffer
+                chunkId = Date.now().toString(); // Get new chunk ID
             } else {
-                silenceCount = 0;
-            }
-
-            if (silenceCount >= SILENCE_FRAMES) {
-                if (buffer.length > 0) {
-                    buffer = []; // Reset buffer for the next sentence
-                    chunkId = Date.now().toString(); // Get new chunk ID
-                }
-            } else {
-                // Not a long enough pause, so keep accumulating the audio
                 buffer.push(...audioData);
             }
 
@@ -177,6 +157,11 @@ limitations under the License.
                 buffer = []; // Reset buffer
                 chunkId = Date.now().toString(); // Get new chunk ID
             }
+        }
+
+        function isSilent(data) {
+            const maxVal = Math.max(...data);
+            return maxVal < SILENCE_THRESHOLD / 32767; // Convert to 16-bit equivalent threshold
         }
 
         function sendChunk() {
