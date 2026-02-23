@@ -15,7 +15,6 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 -->
-
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -25,7 +24,6 @@ limitations under the License.
             font-family: Arial, sans-serif;
             text-align: center;
         }
-
         canvas {
             border: 1px solid black;
             margin: 20px auto;
@@ -33,7 +31,6 @@ limitations under the License.
         }
     </style>
 </head>
-
 <body>
     <h1>Audio Grabber</h1>
     <input type="text" id="serverhost" placeholder="Transcribe Host" value="localhost">
@@ -177,7 +174,7 @@ limitations under the License.
                 const serverhost = document.getElementById('serverhost').value;
                 const serverport = document.getElementById('serverport').value;
                 const transcribeurl = `http://${serverhost}:${serverport}/transcribe`;
-
+                // const csrftoken = getCookie('csrftoken');
                 fetch(transcribeurl, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -254,5 +251,4 @@ limitations under the License.
         }
     </script>
 </body>
-
 </html>

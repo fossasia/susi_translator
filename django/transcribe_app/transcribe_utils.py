@@ -126,9 +126,7 @@ def process_audio():
 
                     # Transcribe the audio data using the Whisper model
                     #start_time = time.time()
-                    print(f"DEBUG: use_whisper_server is {use_whisper_server}", flush=True)
                     if use_whisper_server:
-                        print("DEBUG: Using remote whisper server!", flush=True)
                         if audio_array.dtype != np.int16:
                             # Resample the audio to 16kHz and 16-bit format (LEI16@16000)
                             audio_array = audio_array.astype(np.int16)  # Ensure 16-bit encoding
@@ -138,7 +136,6 @@ def process_audio():
                         sample_rate = 16000
                         wav_write(wav_buffer, sample_rate, audio_array)
                         wav_buffer.seek(0)
-                        
                         # Prepare the request to the whisper server
                         files = {'file': ('audio.wav', wav_buffer, 'audio/wav')}
                         data = {
@@ -166,11 +163,9 @@ def process_audio():
                     else:
                         # Convert int16 to float32 and normalize
                         audio_array = audio_array.astype(np.float32) / 32768.0
-                        print(f"Audio array shape: {audio_array.shape}, min: {audio_array.min()}, max: {audio_array.max()}, dtype: {audio_array.dtype}", flush=True)
                         # Convert to PyTorch tensor
                         audio_tensor = torch.from_numpy(audio_array)
                         result = model_fast.transcribe(audio_tensor, temperature=0)            
-                        print(f"Whisper raw result for chunk {chunk_id}: {result}", flush=True)
                         transcript = result.get('text', '').strip()
                     #print("... finished transcribe")
                     #print(f"transcribe time: {time.time() - start_time}")
