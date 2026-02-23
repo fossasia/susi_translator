@@ -173,7 +173,14 @@ class GetLatestTranscriptView(APIView):
             untilid = request.GET.get('until', str(int(time.time() * 1000)))
             sorted_keys = sorted(transcripts.keys(), reverse=True)
             # remove all keys that are greater than untilid
-            sorted_keys = [k for k in sorted_keys if int(k) <= int(untilid)]
+            new_sorted_keys = []
+            for k in sorted_keys:
+                try:
+                    if int(k) <= int(untilid):
+                        new_sorted_keys.append(k)
+                except ValueError:
+                    pass # Ignore non-numeric chunk IDs
+            sorted_keys = new_sorted_keys
             # now extract the first three keys from largest to smallest
             extracted_keys = sorted_keys[:4] if len(sorted_keys) > 3 else sorted_keys
             # from the transcripts dictionary, extract the transcripts for the extracted keys

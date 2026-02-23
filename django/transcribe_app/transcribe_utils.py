@@ -126,7 +126,9 @@ def process_audio():
 
                     # Transcribe the audio data using the Whisper model
                     #start_time = time.time()
+                    print(f"DEBUG: use_whisper_server is {use_whisper_server}", flush=True)
                     if use_whisper_server:
+                        print("DEBUG: Using remote whisper server!", flush=True)
                         if audio_array.dtype != np.int16:
                             # Resample the audio to 16kHz and 16-bit format (LEI16@16000)
                             audio_array = audio_array.astype(np.int16)  # Ensure 16-bit encoding
@@ -136,7 +138,7 @@ def process_audio():
                         sample_rate = 16000
                         wav_write(wav_buffer, sample_rate, audio_array)
                         wav_buffer.seek(0)
-
+                        
                         # Prepare the request to the whisper server
                         files = {'file': ('audio.wav', wav_buffer, 'audio/wav')}
                         data = {
@@ -164,9 +166,11 @@ def process_audio():
                     else:
                         # Convert int16 to float32 and normalize
                         audio_array = audio_array.astype(np.float32) / 32768.0
+                        print(f"Audio array shape: {audio_array.shape}, min: {audio_array.min()}, max: {audio_array.max()}, dtype: {audio_array.dtype}", flush=True)
                         # Convert to PyTorch tensor
                         audio_tensor = torch.from_numpy(audio_array)
                         result = model_fast.transcribe(audio_tensor, temperature=0)            
+                        print(f"Whisper raw result for chunk {chunk_id}: {result}", flush=True)
                         transcript = result.get('text', '').strip()
                     #print("... finished transcribe")
                     #print(f"transcribe time: {time.time() - start_time}")
@@ -283,9 +287,14 @@ def clean_old_transcripts():
         # make a list of tenant_ids to delete
         to_delete = []
         # iterate over all dictionaries in transcriptd
-        for tenant_id in transcriptsd.keys():
-            transcripts = transcriptsd[tenant_id]
-            old_chunks = [chunk_id for chunk_id in transcripts if int(chunk_id) < two_hours_ago]
+        for tenant_id, transcripts in transcriptsd.items():
+            old_chunks = []
+            for chunk_id in transcripts:
+                try:
+                    if int(chunk_id) < two_hours_ago:
+                        old_chunks.append(chunk_id)
+                except ValueError:
+                    pass # Ignore non-numeric chunk IDs (e.g. debugging)
             for chunk_id in old_chunks: del transcripts[chunk_id]
             # its possible that the tenant_id has no more transcripts
             if len(transcripts) == 0: to_delete.append(tenant_id)
