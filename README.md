@@ -35,7 +35,27 @@ This file contains the client-side logic, which:
 
 To set up and run the project, follow these steps:
 
-* Install the required Python packages: pyaudio, flask, requests, whisper
+* install uv: https://docs.astral.sh/uv/getting-started/installation/
+* Install Venv by running:
+```
+uv sync
+```
+* Activate Venv by running:
+- macOS / Linux
+``` bash
+source .venv/bin/activate
+```
+
+- Windows (PowerShell)
+``` PowerShell
+.venv\Scripts\Activate.ps1
+```
+
+- Windows (Command Prompt)
+``` cmd
+.venv\Scripts\activate.bat
+```
+
 * Run `audio_grabber.py` to start capturing audio from the microphone
 * Run `transcribe_server.py` to start the server
 * Open `transcribe_listener.py` in the browser to start displaying transcribed text in real-time
