@@ -75,9 +75,9 @@ limitations under the License.
           // Backward Compatibility Check
           if (data.chunk_id !== undefined) {
             // 1. Legacy Flask Server Format
-            const chunkId = data.chunk_id;
-            const transcript = data.transcript;
-            if (!transcript) return;
+            const chunkId = String(data.chunk_id);
+            const transcript = data.transcript || "";
+            if (chunkId === "-1" || !transcript.trim()) return;
 
             if (chunkId !== latestChunkId) {
               const newLine = document.createElement('div');
@@ -85,7 +85,9 @@ limitations under the License.
               transcriptContainer.appendChild(newLine);
               latestChunkId = chunkId;
             } else {
-              transcriptContainer.lastChild.textContent = transcript;
+              if (transcriptContainer.lastChild) {
+                transcriptContainer.lastChild.textContent = transcript;
+              }
             }
           } else {
             // 2. New Django Server Format
