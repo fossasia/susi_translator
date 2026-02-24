@@ -88,7 +88,7 @@ To set up Virtual Environment and install dependencies, follow these steps:
     .venv\Scripts\activate.bat
     ```
 
-### 4. Configure Environment Variables
+### 3. Configure Environment Variables
 Set the necessary environment variables for the Whisper model:
 
 - WHISPER_SERVER_USE: Set to false to use local models.
@@ -108,7 +108,7 @@ Load the environment variables:
 export $(grep -v '^#' .env | xargs)
 ```
 
-### 5. Set Up Django Settings
+### 4. Set Up Django Settings
 Ensure your settings.py file is correctly configured.
 
 - SECRET_KEY: Generate a secret key for your Django project.
@@ -198,7 +198,7 @@ STATIC_ROOT = BASE_DIR / 'staticfiles'
 STATICFILES_DIRS = [BASE_DIR / 'static']
 ```
 
-### 6. Apply Migrations
+### 5. Apply Migrations
 Run Django migrations to set up your database schema:
 
 ```
@@ -206,7 +206,7 @@ python3 manage.py makemigrations
 python3 manage.py migrate
 ```
 
-### 7. Create a Superuser
+### 6. Create a Superuser
 Create an admin account to access the Django admin interface:
 
 ```
@@ -215,13 +215,13 @@ python3 manage.py createsuperuser
 
 Provide a username, email, and password when prompted.
 
-### 8. Run the Development Server
+### 7. Run the Development Server
 Start the Django development server:
 ```
 python3 manage.py runserver 0.0.0.0:5040
 ```
 
-### 9. Development Workflow
+### 8. Development Workflow
 
 #### Running the Application
 - Ensure your virtual environment is activated.
