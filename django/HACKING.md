@@ -6,14 +6,13 @@ Welcome to the development guide for the Transcription API project. This documen
 - [Project Structure](#project-structure)
 - [Setting Up the Development Environment](#setting-up-the-development-environment)
   - [1. Clone the Repository](#1-clone-the-repository)
-  - [2. Create a Virtual Environment](#2-create-a-virtual-environment)
-  - [3. Install Dependencies](#3-install-dependencies)
-  - [4. Configure Environment Variables](#4-configure-environment-variables)
-  - [5. Set Up Django Settings](#5-set-up-django-settings)
-  - [6. Apply Migrations](#6-apply-migrations)
-  - [7. Create a Superuser](#7-create-a-superuser)
-  - [8. Run the Development Server](#8-run-the-development-server)
-  - [9. Development Workflow](#9-development-workflow)
+  - [2. Create a Virtual Environment and Install Dependencies](#2-create-a-virtual-environment-and-install-dependencies)
+  - [3. Configure Environment Variables](#3-configure-environment-variables)
+  - [4. Set Up Django Settings](#4-set-up-django-settings)
+  - [5. Apply Migrations](#5-apply-migrations)
+  - [6. Create a Superuser](#6-create-a-superuser)
+  - [7. Run the Development Server](#7-run-the-development-server)
+  - [8. Development Workflow](#8-development-workflow)
 
 ---
 
@@ -65,30 +64,34 @@ cd transcribe_project
 ```
 
 ### 2. Create a Virtual Environment and Install Dependencies
+
 To set up Virtual Environment and install dependencies, follow these steps:
 
-* install uv: https://docs.astral.sh/uv/getting-started/installation/
-* Install Venv by running (make sure uv is installed):
+- install uv: https://docs.astral.sh/uv/getting-started/installation/
+- Install Venv by running (make sure uv is installed):
   ```
   uv sync
   ```
-* Activate Venv by running:
+- Activate Venv by running:
   - macOS / Linux
-    ``` bash
+
+    ```bash
     source .venv/bin/activate
     ```
 
   - Windows (PowerShell)
-    ``` PowerShell
+
+    ```PowerShell
     .venv\Scripts\Activate.ps1
     ```
 
   - Windows (Command Prompt)
-    ``` cmd
+    ```cmd
     .venv\Scripts\activate.bat
     ```
 
 ### 3. Configure Environment Variables
+
 Set the necessary environment variables for the Whisper model:
 
 - WHISPER_SERVER_USE: Set to false to use local models.
@@ -96,6 +99,7 @@ Set the necessary environment variables for the Whisper model:
 - WHISPER_MODEL_SMART: The name of the smart Whisper model (e.g., medium).
 
 Create a .env file in the root directory:
+
 ```
 WHISPER_SERVER_USE=false
 WHISPER_MODEL_FAST=small
@@ -109,30 +113,36 @@ export $(grep -v '^#' .env | xargs)
 ```
 
 ### 4. Set Up Django Settings
+
 Ensure your settings.py file is correctly configured.
 
 - SECRET_KEY: Generate a secret key for your Django project.
+
 ```
 # transcribe_project/settings.py
 SECRET_KEY = 'your-unique-secret-key'
 ```
 
 Generate a secret key:
+
 ```
 python3 -c 'from django.core.management.utils import get_random_secret_key; print(get_random_secret_key())'
 ```
 
 - DEBUG: Set to True for development.
+
 ```
 DEBUG = True
 ```
 
 - ALLOWED_HOSTS: Allow all hosts during development.
+
 ```
 ALLOWED_HOSTS = ['*']
 ```
 
 - INSTALLED_APPS: Ensure all necessary apps are included.
+
 ```
 INSTALLED_APPS = [
     'django.contrib.admin',
@@ -149,6 +159,7 @@ INSTALLED_APPS = [
 ```
 
 - MIDDLEWARE: Include required middleware.
+
 ```
 MIDDLEWARE = [
     'corsheaders.middleware.CorsMiddleware',
@@ -163,6 +174,7 @@ MIDDLEWARE = [
 ```
 
 - TEMPLATES: Configure template directories.
+
 ```
 TEMPLATES = [
     {
@@ -182,6 +194,7 @@ TEMPLATES = [
 ```
 
 - DATABASES: Use SQLite for development.
+
 ```
 DATABASES = {
     'default': {
@@ -192,6 +205,7 @@ DATABASES = {
 ```
 
 - Static Files: Configure static files settings.
+
 ```
 STATIC_URL = '/static/'
 STATIC_ROOT = BASE_DIR / 'staticfiles'
@@ -199,6 +213,7 @@ STATICFILES_DIRS = [BASE_DIR / 'static']
 ```
 
 ### 5. Apply Migrations
+
 Run Django migrations to set up your database schema:
 
 ```
@@ -207,6 +222,7 @@ python3 manage.py migrate
 ```
 
 ### 6. Create a Superuser
+
 Create an admin account to access the Django admin interface:
 
 ```
@@ -216,7 +232,9 @@ python3 manage.py createsuperuser
 Provide a username, email, and password when prompted.
 
 ### 7. Run the Development Server
+
 Start the Django development server:
+
 ```
 python3 manage.py runserver 0.0.0.0:5040
 ```
@@ -224,16 +242,20 @@ python3 manage.py runserver 0.0.0.0:5040
 ### 8. Development Workflow
 
 #### Running the Application
+
 - Ensure your virtual environment is activated.
 - Run the development server using python3 manage.py runserver.
 
 #### Accessing the Swagger UI
+
 - Open your browser and navigate to http://localhost:5040/swagger/ to view the Swagger UI.
 - If you need to log in, use the superuser credentials you created earlier.
 
 #### Testing the API Endpoints
+
 - Use tools like curl or Postman to test the API endpoints.
 - For example, to test the transcribe endpoint:
+
 ```
 curl -X POST http://localhost:5040/transcribe -H "Content-Type: application/json" -d '{"tenant_id": "test_tenant", "chunk_id": "12345", "audio": "base64-encoded-audio-data"}'
 ```
