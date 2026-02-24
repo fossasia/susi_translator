@@ -1129,10 +1129,12 @@ dependencies = [
     { name = "flask-restx" },
     { name = "mkdocs" },
     { name = "mkdocs-bootswatch" },
+    { name = "numpy" },
     { name = "openai-whisper" },
     { name = "pyaudio" },
     { name = "pybars3" },
     { name = "requests" },
+    { name = "torch" },
     { name = "whisper" },
 ]
 
@@ -1147,10 +1149,12 @@ requires-dist = [
     { name = "flask-restx", specifier = ">=1.3.2" },
     { name = "mkdocs", specifier = ">=1.6.1" },
     { name = "mkdocs-bootswatch", specifier = ">=1.1" },
+    { name = "numpy", specifier = ">=2.4.2" },
     { name = "openai-whisper", specifier = ">=20250625" },
     { name = "pyaudio", specifier = ">=0.2.14" },
     { name = "pybars3", specifier = ">=0.9.7" },
     { name = "requests", specifier = ">=2.32.5" },
+    { name = "torch", specifier = ">=2.10.0" },
     { name = "whisper", specifier = ">=1.1.10" },
 ]
 
