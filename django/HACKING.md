@@ -64,25 +64,29 @@ git clone https://github.com/yourusername/transcribe_project.git
 cd transcribe_project
 ```
 
-### 2. Create a Virtual Environment
-It's recommended to use a virtual environment to manage your Python dependencies.
+### 2. Create a Virtual Environment and Install Dependencies
+To set up Virtual Environment and install dependencies, follow these steps:
 
-```
-python3 -m venv venv
-source venv/bin/activate  # On Windows use `venv\Scripts\activate`
-```
+* install uv: https://docs.astral.sh/uv/getting-started/installation/
+* Install Venv by running (make sure uv is installed):
+  ```
+  uv sync
+  ```
+* Activate Venv by running:
+  - macOS / Linux
+    ``` bash
+    source .venv/bin/activate
+    ```
 
-### 3. Install Dependencies
-Install the required Python packages using pip:
+  - Windows (PowerShell)
+    ``` PowerShell
+    .venv\Scripts\Activate.ps1
+    ```
 
-```
-pip install -r requirements.txt
-```
-
-If requirements.txt does not exist, install the dependencies manually:
-```
-pip3 install django djangorestframework drf-yasg django-cors-headers numpy torch openai-whisper
-```
+  - Windows (Command Prompt)
+    ``` cmd
+    .venv\Scripts\activate.bat
+    ```
 
 ### 4. Configure Environment Variables
 Set the necessary environment variables for the Whisper model:
