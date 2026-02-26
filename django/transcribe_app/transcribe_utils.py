@@ -218,6 +218,13 @@ def process_audio():
                             transcript_event['transcript'] = transcript
                             transcript_event['translate_from'] = translate_from
                             transcript_event['translate_to'] = translate_to
+                            # Trigger translation asynchronously after transcription
+                            if translate_to and not transcript_event.get("translated", False):
+                                threading.Thread(
+                                    target=process_translation,
+                                    args=(transcript_event,),
+                                    daemon=True
+                                ).start()
                     else:
                         logger.warning(f"INVALID transcript for chunk_id {chunk_id}: {transcript}")
                     
