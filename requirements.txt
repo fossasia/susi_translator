@@ -7,4 +7,5 @@ mkdocs-bootswatch
 openai-whisper
 pyaudio
 pybars3
+python-dotenv
 requests
