@@ -111,6 +111,13 @@ def process_audio():
                     # Convert audio bytes to a writable NumPy array
                     audio_data = base64.b64decode(audiob64)
 
+                    # Validate that audio data length is even (required for int16)
+                    if len(audio_data) % 2 != 0:
+                        logger.warning(
+                            f"Audio data length {len(audio_data)} is not even, padding for chunk_id {chunk_id}"
+                        )
+                        audio_data = audio_data + b"\x00" # Pad with a null byte to make it even
+
                     # Convert audio bytes to a writable NumPy array with int16 dtype
                     audio_array = np.frombuffer(audio_data, dtype=np.int16)
                         
