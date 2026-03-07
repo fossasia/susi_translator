@@ -15,7 +15,12 @@ import torch
 import json
 import time
 from scipy.io.wavfile import write as wav_write
+from pathlib import Path
+from dotenv import load_dotenv
 
+# looks for a .env file in the project  (or pass an explicit path)
+BASE_DIR = Path(__file__).resolve().parent.parent
+load_dotenv(BASE_DIR / '.env')
 logger = logging.getLogger(__name__)
 
 # we either use a local in-code model or access a whisper.cpp server
@@ -51,19 +56,20 @@ else:
 
 
     script_dir = os.path.dirname(os.path.abspath(__file__))
+    device = "cuda" if torch.cuda.is_available() else "cpu"
 
     # load or download model
     # the possible model path is models_path + "/" + model_name + ".pt"
     # check if the model exists in the models_path
     models_path = os.path.join(script_dir, 'models')
     if os.path.exists(os.path.join(models_path, model_fast_name + ".pt")):
-        model_fast = whisper.load_model(model_fast_name, in_memory=True, download_root=models_path)
+        model_fast = whisper.load_model(model_fast_name, in_memory=True, download_root=models_path, device=device)
     else:
-        model_fast = whisper.load_model(model_fast_name, in_memory=True)
+        model_fast = whisper.load_model(model_fast_name, in_memory=True, device=device)
     if os.path.exists(os.path.join(models_path, model_smart_name + ".pt")):
-        model_smart = whisper.load_model(model_smart_name, in_memory=True, download_root=models_path)
+        model_smart = whisper.load_model(model_smart_name, in_memory=True, download_root=models_path, device=device)
     else:
-        model_smart = whisper.load_model(model_smart_name, in_memory=True)
+        model_smart = whisper.load_model(model_smart_name, in_memory=True, device=device)
 
 def add_to_audio_stack(tenant_id, chunk_id, audio_b64, translate_from, translate_to):
     """
@@ -172,8 +178,8 @@ def process_audio():
                         # Convert int16 to float32 and normalize
                         audio_array = audio_array.astype(np.float32) / 32768.0
                         # Convert to PyTorch tensor
-                        audio_tensor = torch.from_numpy(audio_array)
-                        result = model_fast.transcribe(audio_tensor, temperature=0)            
+                        audio_tensor = torch.from_numpy(audio_array).to(device=device)
+                        result = model_smart.transcribe(audio_tensor, temperature=0, fp16=torch.cuda.is_available(), condition_on_previous_text=False)            
                         transcript = result.get('text', '').strip()
                     #print("... finished transcribe")
                     #print(f"transcribe time: {time.time() - start_time}")
