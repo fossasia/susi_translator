@@ -45,9 +45,16 @@ class TranscribeView(APIView):
     )
     def post(self, request):
         """
-        The /transcribe endpoint expects JSON objects with base64-encoded audio binaries.
-        Each chunk should have a unique chunk_id.
-        The server processes each chunk and transcribes the audio using Whisper.
+        Transcribe an audio chunk.
+
+        Expects a JSON body with:
+        - `audio_b64`: Base64 encoded audio binary (PCM 16-bit, 16kHz recommended).
+        - `chunk_id`: A unique identifier for the chunk (e.g., timestamp).
+        - `tenant_id`: (Optional) ID to isolate streams. Defaults to '0000'.
+        - `translate_from`: (Optional) Source language code (e.g., 'en').
+        - `translate_to`: (Optional) Target language code for translation (e.g., 'de').
+
+        Returns a status object indicating the chunk is being processed.
         """
         serializer = TranscribeInputSerializer(data=request.data)
         if serializer.is_valid():
@@ -79,8 +86,14 @@ class GetTranscriptView(APIView):
     )
     def get(self, request):
         """
-        Retrieve the transcript for a given chunk_id.
-        If the chunk_id is not found, an empty transcript is returned.
+        Retrieve a specific transcript.
+
+        Query Parameters:
+        - `tenant_id`: Defaults to '0000'.
+        - `chunk_id`: The ID of the chunk to retrieve.
+        - `sentences`: Boolean. If true, attempts to merge and split into sentences.
+
+        Returns the transcribed text or an empty string if not found.
         """
         tenant_id = request.GET.get('tenant_id', '0000')
         t = get_transcripts(tenant_id)
@@ -162,7 +175,13 @@ class GetLatestTranscriptView(APIView):
     )
     def get(self, request):
         """
-        Retrieve the latest transcript for a given tenant_id. Optionally translate it into another language.
+        Retrieve the latest available transcripts.
+
+        Query Parameters:
+        - `tenant_id`: Defaults to '0000'.
+        - `until`: (Optional) Chunk ID to filter transcripts up to a certain point.
+
+        Returns a dictionary of transcript events indexed by chunk_id.
         """
         tenant_id = request.GET.get('tenant_id', '0000')
         transcripts = get_transcripts(tenant_id)

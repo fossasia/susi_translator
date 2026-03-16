@@ -409,7 +409,8 @@ def translate_with_llm(text, target_language):
 
 def translate(text, source_language, target_language):
     """
-    Translate the given text from source_language to target_language.
+    Translate text using the SUSI AI Translation service (m2m.susi.ai).
+    Caches results to minimize redundant API calls.
     """
     global translation_ongoing
     # first try to translate from the cache

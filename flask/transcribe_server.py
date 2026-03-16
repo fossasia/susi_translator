@@ -65,8 +65,13 @@ else:
 transcriptd = {} # should be a dictionary of dictionaries; the key is the tenant_id and the value is a dictionary with the chunk_id as key and the transcript as value
 audio_stack = queue.Queue() # is this a fifo queue? yes, it is, a FILO queue would be LifoQueue
 
-# Process audio data
+# Process audio data from the stack
 def process_audio():
+    """
+    Background worker that continuously pops audio from the queue,
+    decodes it, and runs transcription via Whisper.
+    Supports local model inference or remote whisper.cpp server.
+    """
     while True:
         tenant_id, chunk_id, audiob64 = audio_stack.get()
         logger.debug(f"Queue length: {audio_stack.qsize()}")
@@ -291,11 +296,11 @@ class Transcribe(Resource):
     @api.response(200, 'Success', transcribe_response_model)
     @api.response(404, 'Transcript Not Found')
     def post(self):
-        '''
-        The /transcribe endpoint expects a stream of JSON objects with base64-encoded audio binaries.
-        Each chunk should have a unique chunk_id.
-        The server processes each chunk and transcribes the audio using Whisper.
-        '''
+        """
+        Receives a stream of JSON objects containing base64 audio.
+        Each object should have 'audio_b64', 'chunk_id', and optionally 'tenant_id'.
+        Streams back status updates as Server-Sent Events (SSE).
+        """
         def generate_transcript():
             while True:
                 chunk = request.stream.read(2048000)
@@ -332,10 +337,10 @@ class GetTranscript(Resource):
     @api.response(200, 'Success', transcript_response_model)
     @api.response(404, 'Transcript Not Found')
     def get(self):
-        '''
-        The /get_transcript endpoint allows clients to retrieve the transcript for a given chunk_id.
-        If the chunk_id is not found, an empty transcript is returned.
-        '''
+        """
+        Retrieve a transcript for a specific chunk.
+        Query Params: tenant_id, chunk_id, sentences (bool).
+        """
         tenant_id = request.args.get('tenant_id', '0000')
         t = transcriptd.get(tenant_id, {})
         if len(t) == 0:
