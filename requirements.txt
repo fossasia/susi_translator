@@ -8,3 +8,4 @@ openai-whisper
 pyaudio
 pybars3
 requests
+python-dotenv
