@@ -1,63 +1,68 @@
 <!DOCTYPE html>
 <html>
-<!--
-Copyright [2024] [Michael Peter Christen, mc@yacy.net]
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-   http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
--->
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Transcript Display</title>
   <style>
-    body {
-      margin: 0;
-    }
-    #header {
-      padding: 10px;
-      box-sizing: border-box;
-    }
-    #transcript-container {
-      overflow-y: auto;
-      border: 1px solid #ccc;
-      padding: 10px;
-      box-sizing: border-box;
-    }
+    body { font-family: Arial, sans-serif; margin: 0; }
+    #header { padding: 10px; background: #f0f0f0; }
+    #status { color: green; }
+    #error { color: red; }
+    #transcript-container { height: 60vh; overflow-y: auto; border: 1px solid #ccc; padding: 10px; }
+    #copyBtn { margin-top: 10px; }
   </style>
 </head>
 <body>
-  <h1>Transcript Display</h1>
   <div id="header">
     <input type="text" id="serverhost" placeholder="Transcribe Host" value="localhost">
     <input type="text" id="serverport" placeholder="Transcribe Port" value="5040">
-    <button id="newsessionBtn">New Session</button>
+    <button id="connectBtn">Connect</button>
+    <span id="status"></span>
+    <span id="error"></span>
   </div>
   <div id="transcript-container"></div>
-
+  <button id="copyBtn">Copy Transcript</button>
   <script>
-    let latestChunkId = null;
-    let transcriptContainer = document.getElementById('transcript-container');
+    let transcript = '';
+    let intervalId = null;
 
-    function adjustTranscriptContainerHeight() {
-      const headerHeight = document.getElementById('header').offsetHeight;
-      const windowHeight = window.innerHeight;
-      transcriptContainer.style.height = (windowHeight - headerHeight - 80) + 'px';
+    function setStatus(msg) {
+      document.getElementById('status').textContent = msg;
+      document.getElementById('error').textContent = '';
+    }
+    function setError(msg) {
+      document.getElementById('error').textContent = msg;
+      document.getElementById('status').textContent = '';
     }
 
-    document.getElementById('newsessionBtn').addEventListener('click', newSession);
-    async function newSession() {
-      while (transcriptContainer.firstChild) {
-        transcriptContainer.removeChild(transcriptContainer.firstChild);
+    function connect() {
+      const host = document.getElementById('serverhost').value;
+      const port = document.getElementById('serverport').value;
+      setStatus('Connecting...');
+      if (intervalId) clearInterval(intervalId);
+      intervalId = setInterval(() => {
+        fetch(`http://${host}:${port}/latest`)
+          .then(r => r.json())
+          .then(data => {
+            if (data.text) {
+              transcript += data.text + '\n';
+              document.getElementById('transcript-container').textContent = transcript;
+              document.getElementById('transcript-container').scrollTop = document.getElementById('transcript-container').scrollHeight;
+              setStatus('Connected');
+            }
+          })
+          .catch(e => setError('Connection error: ' + e));
+      }, 2000);
+    }
+
+    document.getElementById('connectBtn').onclick = connect;
+    document.getElementById('copyBtn').onclick = function() {
+      navigator.clipboard.writeText(transcript);
+      setStatus('Transcript copied!');
+    };
+  </script>
+</body>
+</html>
       }
       latestChunkId = null;
     }

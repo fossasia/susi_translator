@@ -1,63 +1,50 @@
-from flask import Flask, request, Response, jsonify, stream_with_context
-from flask_restx import Api, Resource, fields
+from flask import Flask, request, jsonify
 from flask_cors import CORS
-import numpy as np
-import threading
-import requests
-import logging
 import whisper
-import base64
-import queue
-import torch
-import json
-import time
 import os
+import logging
 
-logging.basicConfig(level=logging.DEBUG, format='%(asctime)s %(levelname)s: %(message)s')
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
-api = Api(app, version='1.0', title='Transcription API',
-          description='A simple Transcription API', doc='/swagger')
-CORS(app, resources={r"/*": {"origins": "*"}})
+CORS(app)
 
-# we either use a local in-code model or access a whisper.cpp server
-use_whisper_server = os.getenv('WHISPER_SERVER_USE', 'false') == 'true'
-#model_name = os.getenv('WHISPER_MODEL', 'tiny')     # 39M
-#model_name = os.getenv('WHISPER_MODEL', 'base')     # 74M
-model_fast_name = os.getenv('WHISPER_MODEL', 'small')    # 244M
-model_smart_name = os.getenv('WHISPER_MODEL', 'medium')   # 769M
-#model_name = os.getenv('WHISPER_MODEL', 'large-v3') # 1550M
+# Load model at startup
+MODEL_NAME = os.getenv('WHISPER_MODEL', 'small')
+try:
+    model = whisper.load_model(MODEL_NAME)
+    logger.info(f"Loaded Whisper model: {MODEL_NAME}")
+except Exception as e:
+    logger.error(f"Failed to load Whisper model: {e}")
+    model = None
 
-if use_whisper_server:
-    # Use the whisper.cpp server
-    # this requires to start the server with the following command:
-    # cd whisper.cpp
-    # bash ./models/download-ggml-model.sh small
-    # bash ./models/download-ggml-model.sh medium
-    # bash ./models/download-ggml-model.sh large-v3
-    # ./server -m models/ggml-medium.bin -l de -p 16 -t 32 --host 0.0.0.0 --port 8007
-    # ./server -m models/ggml-large-v3.bin -l de -p 16 -t 32 --host 0.0.0.0 --port 8007
-    whisper_server = os.getenv('WHISPER_SERVER', 'http://localhost:8007')
-else:
-    # Download a whisper model. If the download using the whisper library is not possible
-    # i.e. if you are offline or behind a firewall, you can also use locally stored models.
-    # To use a local model, download a model from the links as listed in
-    # https://github.com/openai/whisper/blob/main/whisper/__init__.py#L17-L30
+@app.route('/health', methods=['GET'])
+def health():
+    return jsonify({'status': 'ok', 'model_loaded': model is not None})
 
+@app.route('/transcribe', methods=['POST'])
+def transcribe():
+    if model is None:
+        return jsonify({'error': 'Model not loaded'}), 500
+    try:
+        data = request.get_json()
+        audio_b64 = data.get('audio')
+        chunk_id = data.get('chunk_id')
+        if not audio_b64 or not chunk_id:
+            return jsonify({'error': 'Missing audio or chunk_id'}), 400
+        import base64
+        import numpy as np
+        audio_bytes = base64.b64decode(audio_b64)
+        audio_np = np.frombuffer(audio_bytes, np.int16).astype(np.float32) / 32768.0
+        result = model.transcribe(audio_np)
+        return jsonify({'chunk_id': chunk_id, 'text': result['text']})
+    except Exception as e:
+        logger.error(f"Transcription error: {e}")
+        return jsonify({'error': str(e)}), 500
 
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-
-    # load or download model
-    # the possible model path is models_path + "/" + model_name + ".pt"
-    # check if the model exists in the models_path
-    models_path = os.path.join(script_dir, 'models')
-    if os.path.exists(os.path.join(models_path, model_fast_name + ".pt")):
-        model_fast = whisper.load_model(model_fast_name, in_memory=True, download_root=models_path)
-    else:
-        model_fast = whisper.load_model(model_fast_name, in_memory=True)
-    if os.path.exists(os.path.join(models_path, model_smart_name + ".pt")):
-        model_smart = whisper.load_model(model_smart_name, in_memory=True, download_root=models_path)
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=5040)
     else:
         model_smart = whisper.load_model(model_smart_name, in_memory=True)
 

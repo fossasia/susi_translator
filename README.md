@@ -33,13 +33,48 @@ This file contains the client-side logic, which:
 
 ## Setup and Run
 
-To set up and run the project, follow these steps:
+### 1. Install Python dependencies
 
-* Install the required Python packages: pyaudio, flask, requests, whisper
-* Run `audio_grabber.py` to start capturing audio from the microphone
-* Run `transcribe_server.py` to start the server
-* Open `transcribe_listener.py` in the browser to start displaying transcribed text in real-time
+Open a terminal in the project root and run:
 
 ```
-./server -m models/ggml-large-v3.bin -l de -p 16 -t 32 --host 0.0.0.0 --port 8007
+pip install -r requirements.txt
 ```
+
+### 2. Start the transcription server
+
+You can use the one-click script (Windows):
+
+```
+start_server.bat
+```
+
+Or run manually:
+
+```
+python susi_translator/flask/transcribe_server.py
+```
+
+### 3. Start the audio grabber client
+
+In a new terminal:
+
+```
+python susi_translator/flask/audio_grabber.py
+```
+You will be prompted to select your microphone device.
+
+### 4. View the transcript in your browser
+
+Open the file `susi_translator/flask/transcribe_listener.html` in your web browser. Enter the server host/port if different from default, and click Connect.
+
+### Features & Improvements
+
+- Robust error handling and user feedback
+- Health check endpoint at `/health` for server status
+- Device selection for audio input
+- Status and error indicators in the HTML client
+- Copy transcript button in the HTML client
+
+---
+For advanced usage or troubleshooting, see comments in each file.

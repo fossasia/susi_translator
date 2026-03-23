@@ -3,61 +3,55 @@ import base64
 import json
 import requests
 import time
-import threading
-import wave
-from urllib3.util.retry import Retry
-from urllib3.exceptions import MaxRetryError
-
-
-# The AudioGrabber class initializes a PyAudio stream to capture audio from the microphone.
-# The start method starts a separate thread to send audio chunks to the server.
-# The send_audio method reads audio data from the stream, buffers it, and sends it to the server
-# every 1 second.
-# When the buffer reaches 20 seconds of audio, the send_chunk method is called to send the chunk
-# to the server.
-# The send_chunk method encodes the audio data with base64, creates a JSON payload with the chunk ID,
-# and sends it to the server using requests.
-# If the server responds with a 200 status
+import argparse
 
 RATE = 16000
-CHUNK_SIZE = RATE
-AUDIO_FORMAT = pyaudio.paInt16
+CHUNK = RATE
+FORMAT = pyaudio.paInt16
 CHANNELS = 1
-BUFFER_SIZE = 2 * 10 * RATE  # 10 seconds of audio
-SILENCE_THRESHOLD = 500
-INPUT_DEVICE_INDEX = 1
 
-class AudioGrabber:
-    def __init__(self):
-        self.audio = pyaudio.PyAudio()
-        self.stream = self.audio.open(format=AUDIO_FORMAT,
-                                      channels=CHANNELS,
-                                      rate=RATE,
-                                      input=True,
-                                      input_device_index=INPUT_DEVICE_INDEX,
-                                      frames_per_buffer=CHUNK_SIZE,
-                                      stream_callback=self.audio_callback)
-        self.buffer = bytearray()
-        self.chunk_id = str(int(time.time() * 1000))
-        self.send_thread = None
-        self.recording = True
+def list_devices(audio):
+    print("Available audio input devices:")
+    for i in range(audio.get_device_count()):
+        info = audio.get_device_info_by_index(i)
+        print(f"{i}: {info['name']}")
 
-    def audio_callback(self, audio_data, frame_count, time_info, status):
-        # Process the audio data here
-        # print("callback audio size " + str(len(audio_data)))
-        audio_sample = wave.struct.unpack("%dh" % (len(audio_data) / 2), audio_data)
-        # if there is silence, we reset the buffer
-        if (self.is_silent(audio_sample)):
-            print("silence..")
-            # we can reset the buffer here because we know that the current buffer has been send; its therefore the final buffer
-            self.buffer = bytearray()  # Reset buffer
-            self.chunk_id = str(int(time.time() * 1000)) # get new chunk ID: time in milliseconds
-        else:
-            print("audio extend")
-            self.buffer.extend(audio_data)
-            print("buffer audio size " + str(len(self.buffer)))
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--server', default='http://localhost:5040/transcribe')
+    parser.add_argument('--device', type=int, default=None)
+    args = parser.parse_args()
 
-        # always send the buffern unless it's too small
+    audio = pyaudio.PyAudio()
+    list_devices(audio)
+    device_index = args.device if args.device is not None else int(input("Select input device index: "))
+
+    stream = audio.open(format=FORMAT, channels=CHANNELS, rate=RATE, input=True, input_device_index=device_index, frames_per_buffer=CHUNK)
+    print("Recording... Press Ctrl+C to stop.")
+
+    try:
+        while True:
+            frames = stream.read(CHUNK)
+            audio_b64 = base64.b64encode(frames).decode('utf-8')
+            chunk_id = str(int(time.time() * 1000))
+            payload = {'audio': audio_b64, 'chunk_id': chunk_id}
+            try:
+                r = requests.post(args.server, json=payload, timeout=10)
+                if r.ok:
+                    print(f"Transcribed: {r.json().get('text')}")
+                else:
+                    print(f"Server error: {r.text}")
+            except Exception as e:
+                print(f"Error sending audio: {e}")
+    except KeyboardInterrupt:
+        print("Stopped.")
+    finally:
+        stream.stop_stream()
+        stream.close()
+        audio.terminate()
+
+if __name__ == '__main__':
+    main()
         if len(self.buffer) > 0:
             print("send chunk")
             self.send_chunk()
