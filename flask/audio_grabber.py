@@ -70,10 +70,6 @@ class AudioGrabber:
         # Return the status code to continue the stream
         return audio_data, pyaudio.paContinue
     
-    def start(self):
-        self.send_thread = threading.Thread(target=self.send_audio)
-        self.send_thread.start()
-
     def is_silent(self, data):
         m = max(data)
         print(str(m))
@@ -92,7 +88,7 @@ class AudioGrabber:
             session.mount('http://', adapter)
             session.mount('https://', adapter)
             headers = {'Content-Type': 'application/json'}  # Ensure correct header
-            response = session.post('http://localhost:5040/transcribe', json=data)
+            response = session.post('http://localhost:5000/transcribe', json=data)
         
             if response.status_code == 200:
                 print(f'Sent chunk {self.chunk_id} with {len(self.buffer)} bytes')
@@ -105,6 +101,8 @@ class AudioGrabber:
 
     def start(self):
         self.stream.start_stream()
+        self.send_thread = threading.Thread(target=self.send_chunk)
+        self.send_thread.start()
 
     def stop(self):
         self.recording = False
