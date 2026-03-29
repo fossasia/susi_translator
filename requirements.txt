@@ -2,9 +2,11 @@ django
 django-cors-headers
 djangorestframework
 drf_yasg
+flask-sock
 mkdocs
 mkdocs-bootswatch
 openai-whisper
 pyaudio
 pybars3
 requests
+simple-websocket

@@ -1,6 +1,7 @@
 from flask import Flask, request, Response, jsonify, stream_with_context
 from flask_restx import Api, Resource, fields
 from flask_cors import CORS
+from flask_sock import Sock
 import numpy as np
 import threading
 import requests
@@ -13,6 +14,11 @@ import json
 import time
 import os
 
+from websocket_manager import emit_stream_update
+
+from stt_config import STT_NUM_WORKERS, STT_MAX_QUEUE_SIZE, STT_QUEUE_OVERFLOW_POLICY
+from stt_ingest import try_enqueue
+
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s %(levelname)s: %(message)s')
 logger = logging.getLogger(__name__)
 
@@ -20,6 +26,40 @@ app = Flask(__name__)
 api = Api(app, version='1.0', title='Transcription API',
           description='A simple Transcription API', doc='/swagger')
 CORS(app, resources={r"/*": {"origins": "*"}})
+sock = Sock(app)
+
+_worker_started = False
+_worker_lock = threading.Lock()
+
+
+def ensure_process_audio_thread():
+    """Start the STT worker pool once (HTTP + WebSocket ingestion)."""
+    global _worker_started
+    if _worker_started:
+        return
+    with _worker_lock:
+        if _worker_started:
+            return
+        for i in range(STT_NUM_WORKERS):
+            threading.Thread(
+                target=process_audio,
+                name=f"stt-worker-{i}",
+                daemon=True,
+            ).start()
+        _worker_started = True
+        logger.info(
+            "STT workers started: num=%s max_queue=%s overflow_policy=%s "
+            "(set STT_NUM_WORKERS=1 if your Whisper backend is not thread-safe)",
+            STT_NUM_WORKERS,
+            STT_MAX_QUEUE_SIZE,
+            STT_QUEUE_OVERFLOW_POLICY,
+        )
+
+
+@app.before_request
+def _ensure_stt_worker():
+    ensure_process_audio_thread()
+
 
 # we either use a local in-code model or access a whisper.cpp server
 use_whisper_server = os.getenv('WHISPER_SERVER_USE', 'false') == 'true'
@@ -63,47 +103,80 @@ else:
 
 # In-memory storage for transcripts
 transcriptd = {} # should be a dictionary of dictionaries; the key is the tenant_id and the value is a dictionary with the chunk_id as key and the transcript as value
-audio_stack = queue.Queue() # is this a fifo queue? yes, it is, a FILO queue would be LifoQueue
+audio_stack = queue.Queue(maxsize=STT_MAX_QUEUE_SIZE)
+
+_transcript_lock = threading.Lock()
+_dequeue_coalesce_lock = threading.Lock()
+
+
+def _unpack_audio_item(item):
+    """Normalize to (tenant_id, chunk_id, audio_b64, session_id, enqueue_monotonic_ts)."""
+    if isinstance(item, tuple) and len(item) == 5:
+        return item[0], item[1], item[2], item[3], float(item[4])
+    if isinstance(item, tuple) and len(item) == 4:
+        t, c, a, s = item
+        return t, c, a, s, time.monotonic()
+    tenant_id, chunk_id, audiob64 = item
+    return tenant_id, chunk_id, audiob64, None, time.monotonic()
+
+
+def _queue_coalesce_key(entry):
+    ln = len(entry)
+    if ln >= 5:
+        return entry[0], entry[1], entry[3]
+    if ln == 4:
+        return entry[0], entry[1], entry[3]
+    return entry[0], entry[1], None
+
 
 # Process audio data
 def process_audio():
     while True:
-        tenant_id, chunk_id, audiob64 = audio_stack.get()
-        logger.debug(f"Queue length: {audio_stack.qsize()}")
-        # Skip forward in the stack until we find the last entry with the same chunk_id and the same tenant_id
+        coalesced_gets = 0
+        chunk_id = "-"
+        session_id = None
         try:
-            # scan through the whole audio_stack to find any other entries with the same chunk_id and tenant_id
-            # in case we find one, we skip the head and take the next one from the head of the queue and scan again
-            while audio_stack.qsize() > 0:
-                foundSameChunk = False
-
-                try:
-                    for i in range(audio_stack.qsize()):
-                        next_tenant_id, next_chunk_id, next_audiob64 = audio_stack.queue[i]
-                        if next_tenant_id == tenant_id and next_chunk_id == chunk_id:
-                            # we found one entry with the same chunk_id and tenant_id which means we skip the head
-                            foundSameChunk = True
-                            break # breaks the for loop
-                    if not foundSameChunk: break # breaks the while loop in case we did NOT found any other entry with the same chunk_id and tenant_id
-                    # now we want to skip the head which means we load another head from the queue
-                    tenant_id, chunk_id, audiob64 = audio_stack.get()
-                except IndexError:
-                    break
+            with _dequeue_coalesce_lock:
+                item = audio_stack.get()
+                coalesced_gets += 1
+                tenant_id, chunk_id, audiob64, session_id, enqueue_ts = _unpack_audio_item(item)
+                key = (tenant_id, chunk_id, session_id)
+                logger.debug("STT dequeue qsize=%s key=%s", audio_stack.qsize(), key)
+                # Drop superseded payloads: if a newer entry for the same key exists, advance to it.
+                # Scan from the tail — duplicates from live streaming are usually near the end (O(1) typical).
+                while audio_stack.qsize() > 0:
+                    found_same = False
+                    try:
+                        n = audio_stack.qsize()
+                        for i in range(n - 1, -1, -1):
+                            next_entry = audio_stack.queue[i]
+                            if _queue_coalesce_key(next_entry) == key:
+                                found_same = True
+                                break
+                    except (IndexError, ValueError):
+                        break
+                    if not found_same:
+                        break
+                    tenant_id, chunk_id, audiob64, session_id, enqueue_ts = _unpack_audio_item(
+                        audio_stack.get()
+                    )
+                    coalesced_gets += 1
+                    key = (tenant_id, chunk_id, session_id)
 
             # Convert audio bytes to a writable NumPy array
             audio_data = base64.b64decode(audiob64)
 
             # Convert audio bytes to a writable NumPy array with int16 dtype
             audio_array = np.frombuffer(audio_data, dtype=np.int16)
-                
+
             # Convert int16 to float32 and normalize
             audio_array = audio_array.astype(np.float32) / 32768.0
-                
+
             # Ensure the array is not empty
             if audio_array.size == 0:
                 logger.warning(f"Invalid audio data for chunk_id {chunk_id}")
                 continue
-                
+
             # Ensure no NaN values in audio array
             if np.isnan(audio_array).any():
                 logger.warning(f"NaN values in audio array for chunk_id {chunk_id}")
@@ -112,33 +185,40 @@ def process_audio():
             # Convert to PyTorch tensor
             audio_tensor = torch.from_numpy(audio_array)
 
-            # Transcribe the audio data using the Whisper model
-            #print("start to transcribe ...")
-
-            # measure the time it takes to transcribe
-            #start_time = time.time()
-            # transcribe with a model according to stack size
-            if audio_stack.qsize() > 20:
-                #logger.info(f"using fast transcribe, stack size = {audio_stack.qsize()}")
-                if use_whisper_server:
-                    # make a http request to the whisper_server in the following way:
-                    # curl whisper_server/inference -H "Content-Type: multipart/form-data" -F file="@<file-path>" -F response_format="json"
-                    files = {'file': ('audio.wav', audio_array, 'application/octet-stream')}
-                    data = {'response_format': 'json'}
-                    response = requests.post(whisper_server, files=files, data=data)
-                    
-                else:
-                    result = model_fast.transcribe(audio_tensor, temperature=0)
+            if use_whisper_server:
+                files = {'file': ('audio.wav', audio_array, 'application/octet-stream')}
+                data = {'response_format': 'json'}
+                response = requests.post(whisper_server, files=files, data=data)
+                if response.status_code != 200:
+                    logger.error(
+                        "Whisper server error %s: %s",
+                        response.status_code,
+                        (response.text or "")[:200],
+                    )
+                    continue
+                result = response.json()
+                if not isinstance(result, dict) or "text" not in result:
+                    logger.error("Unexpected whisper server JSON shape")
+                    continue
+            elif audio_stack.qsize() > 20:
+                result = model_fast.transcribe(audio_tensor, temperature=0)
             else:
-                #logger.info(f"using smart transcribe, stack size = {audio_stack.qsize()}")
                 result = model_smart.transcribe(audio_tensor, temperature=0)
-            #print("... finished transcribe")
-            #print(f"transcribe time: {time.time() - start_time}")
-            
-            transcript = result['text'].strip()
+
+            transcript = result["text"].strip()
+            done_ts = time.monotonic()
+            latency_ms = (done_ts - enqueue_ts) * 1000.0
+            logger.info(
+                "stt_latency_ms=%.1f chunk_id=%s session_id=%s qsize=%s workers=%s",
+                latency_ms,
+                chunk_id,
+                session_id or "-",
+                audio_stack.qsize(),
+                STT_NUM_WORKERS,
+            )
             if is_valid(transcript):
                 logger.info(f"VALID transcript for chunk_id {chunk_id}: {transcript}")
-                with threading.Lock():  # Ensure thread-safe access to shared resources
+                with _transcript_lock:
                     # we must distinguish between the case where the chunk_id is already in the transcripts
                     # this can happen quite often because the client will generate a new chunk_id only when
                     # the recorded audio has silence. So all chunks are those pieces with speech without a pause.
@@ -158,60 +238,52 @@ def process_audio():
                         # from the same audio data that has been transcripted before.
                         # The audio was appended by the client!
                         # We just overwrite the current transcript with the new one.
-                        current_transcript['transcript'] = transcript
+                        current_transcript["transcript"] = transcript
                     else:
                         # if the current transcript is None, we create a new entry with the new transcript
-                        transcripts[chunk_id] = {'transcript': transcript} 
+                        transcripts[chunk_id] = {"transcript": transcript}
+                if session_id:
+                    emit_stream_update(session_id, chunk_id, transcript, False)
             else:
                 logger.warning(f"INVALID transcript for chunk_id {chunk_id}: {transcript}")
-            
+
             # clean old transcripts
             clean_old_transcripts()
 
-        # Mark the task as done
         except Exception as e:
             logger.error(f"Error processing audio chunk {chunk_id}", exc_info=True)
         finally:
-            audio_stack.task_done()
+            for _ in range(coalesced_gets):
+                audio_stack.task_done()
 
-# Check if the transcript is valid: Contains at least one ASCII character and no forbidden words
+# Check if the transcript is valid: no known hallucination phrases and no forbidden strings
 def is_valid(transcript):
     transcript_lower = transcript.lower()
-    # Check for at least one ASCII character with a code < 128 and code > 32 (we omit space in this case)
-    has_ascii_char = any(ord(char) < 128 and ord(char) > 32 for char in transcript) 
-    #has_ascii_char = any(ord(char) < 128 for char in transcript) 
-    
-    # Check for forbidden words (case insensitive)
-    forbidden_phrases = {"thank you", "bye!", "thanks for watching", "click, click", "click click", "cough cough", "뉴", "스", "김", "수", "근", "입", "니", "다"}
+
+    forbidden_phrases = {"thanks for watching", "click, click", "click click", "cough cough"}
     contains_forbidden_phrases = any(word in transcript_lower for word in forbidden_phrases)
-    forbidden_strings = {"eh.", "you", "bye.", "it's fine"}
+    forbidden_strings = {"eh.", "bye.", "it's fine"}
     is_forbidden_string = any(word == transcript_lower for word in forbidden_strings)
 
     # check if the transcript has words which are longer than 40 characters
     contains_long_words = any(len(word) > 40 for word in transcript.split())
 
-    # Return true only if both conditions are met
-    return has_ascii_char and not contains_forbidden_phrases and not is_forbidden_string and not contains_long_words;
+    return not contains_forbidden_phrases and not is_forbidden_string and not contains_long_words
 
 # Clean old transcripts: Remove all transcripts older than two hours
 def clean_old_transcripts():
     current_time = int(time.time() * 1000)  # Current time in milliseconds
     two_hours_ago = current_time - (2 * 60 * 60 * 1000)  # Two hours ago in milliseconds
-    with threading.Lock():
-        # make a list of tenant_ids to delete
-        to_delete = []
-        # iterate over all dictionaries in transcriptd
-        for tenant_id in transcriptd.keys():
+    with _transcript_lock:
+        tenants_to_remove = []
+        for tenant_id in list(transcriptd.keys()):
             transcripts = transcriptd[tenant_id]
-            to_delete = [chunk_id for chunk_id in transcripts if int(chunk_id) < two_hours_ago]
-            for chunk_id in to_delete:
+            old_chunks = [chunk_id for chunk_id in transcripts if int(chunk_id) < two_hours_ago]
+            for chunk_id in old_chunks:
                 del transcripts[chunk_id]
-            # its possible that the tenant_id has no more transcripts
             if len(transcripts) == 0:
-                to_delete.append(tenant_id)
-        
-        # delete the tenant_ids
-        for tenant_id in to_delete:
+                tenants_to_remove.append(tenant_id)
+        for tenant_id in tenants_to_remove:
             del transcriptd[tenant_id]
 
 # merge all transcripts into one and split them into sentences
@@ -306,9 +378,17 @@ class Transcribe(Resource):
                     audio_b64 = data['audio_b64']
                     chunk_id = data['chunk_id']
                     tenant_id = data.get('tenant_id', '0000')
-                    audio_stack.put((tenant_id, chunk_id, audio_b64))
+                    ok, err = try_enqueue(audio_stack, (tenant_id, chunk_id, audio_b64))
+                    if ok:
+                        response_data = {'chunk_id': chunk_id, 'tenant_id': tenant_id, 'status': 'processing'}
+                    else:
+                        response_data = {
+                            'chunk_id': chunk_id,
+                            'tenant_id': tenant_id,
+                            'status': 'rejected',
+                            'error': err or 'queue_full',
+                        }
                     #print("queue length: " + str(audio_stack.qsize()))
-                    response_data = {'chunk_id': chunk_id, 'tenant_id': tenant_id, 'status': 'processing'}
                     #print("received chunk " + chunk_id + " with " + str(len(audio_b64)) + " bytes")
                     yield f"data: {json.dumps(response_data)}\n\n".encode('utf-8')
                 except json.JSONDecodeError:
@@ -337,17 +417,17 @@ class GetTranscript(Resource):
         If the chunk_id is not found, an empty transcript is returned.
         '''
         tenant_id = request.args.get('tenant_id', '0000')
-        t = transcriptd.get(tenant_id, {})
-        if len(t) == 0:
-            return jsonify({'chunk_id': '-1', 'transcript': ''})
-        else:
+        with _transcript_lock:
+            t = transcriptd.get(tenant_id, {})
+            if len(t) == 0:
+                return jsonify({'chunk_id': '-1', 'transcript': ''})
             sentences = request.args.get('sentences', default='false') == 'true'
-            if sentences == 'true': t = merge_and_split_transcripts(t)
+            if sentences == 'true':
+                t = merge_and_split_transcripts(t)
             chunk_id = request.args.get('chunk_id')
             if chunk_id in t:
                 return jsonify({'chunk_id': chunk_id, 'transcript': t[chunk_id]['transcript']})
-            else:
-                return jsonify({'chunk_id': chunk_id, 'transcript': ''})
+            return jsonify({'chunk_id': chunk_id, 'transcript': ''})
 
 @api.route('/get_first_transcript')
 class GetFirstTranscript(Resource):
@@ -363,12 +443,13 @@ class GetFirstTranscript(Resource):
         Get first transcript endpoint: Retrieve the first transcript for a given tenant_id
         '''
         tenant_id = request.args.get('tenant_id', '0000')
-        t = transcriptd.get(tenant_id, {})
-        if len(t) == 0:
-            return jsonify({'chunk_id': '-1', 'transcript': ''})
-        else:
+        with _transcript_lock:
+            t = transcriptd.get(tenant_id, {})
+            if len(t) == 0:
+                return jsonify({'chunk_id': '-1', 'transcript': ''})
             sentences = request.args.get('sentences', default='false') == 'true'
-            if sentences == 'true': t = merge_and_split_transcripts(t)
+            if sentences == 'true':
+                t = merge_and_split_transcripts(t)
             fromid = request.args.get('from', default='0')
             first_chunk_id = next((k for k in sorted(t.keys()) if int(k) >= int(fromid)), None)
             first_transcript = t[first_chunk_id]['transcript']
@@ -388,12 +469,13 @@ class PopFirstTranscript(Resource):
         Pop first transcript endpoint: Retrieve and remove the first transcript for a given tenant_id
         '''
         tenant_id = request.args.get('tenant_id', '0000')
-        t = transcriptd.get(tenant_id, {})
-        if len(t) == 0:
-            return jsonify({'chunk_id': '-1', 'transcript': ''})
-        else:
+        with _transcript_lock:
+            t = transcriptd.get(tenant_id, {})
+            if len(t) == 0:
+                return jsonify({'chunk_id': '-1', 'transcript': ''})
             sentences = request.args.get('sentences', default='false') == 'true'
-            if sentences == 'true': t = merge_and_split_transcripts(t)
+            if sentences == 'true':
+                t = merge_and_split_transcripts(t)
             fromid = request.args.get('from', default='0')
             first_chunk_id = next((k for k in sorted(t.keys()) if int(k) >= int(fromid)), None)
             first_transcript = t.pop(first_chunk_id)['transcript']
@@ -413,12 +495,13 @@ class GetLatestTranscript(Resource):
         Get latest transcript endpoint: Retrieve the latest transcript for a given tenant_id
         '''
         tenant_id = request.args.get('tenant_id', '0000')
-        t = transcriptd.get(tenant_id, {})
-        if len(t) == 0:
-            return jsonify({'chunk_id': '-1', 'transcript': ''})
-        else:
+        with _transcript_lock:
+            t = transcriptd.get(tenant_id, {})
+            if len(t) == 0:
+                return jsonify({'chunk_id': '-1', 'transcript': ''})
             sentences = request.args.get('sentences', default='false') == 'true'
-            if sentences == 'true': t = merge_and_split_transcripts(t)
+            if sentences == 'true':
+                t = merge_and_split_transcripts(t)
             untilid = request.args.get('until', default=str(int(time.time() * 1000)))
             latest_chunk_id = next((k for k in sorted(t.keys(), reverse=True) if int(k) < int(untilid)), None)
             latest_transcript = t[latest_chunk_id]['transcript']
@@ -438,12 +521,13 @@ class PopLatestTranscript(Resource):
         Get latest transcript endpoint: Retrieve and remove the latest transcript for a given tenant_id
         '''
         tenant_id = request.args.get('tenant_id', '0000')
-        t = transcriptd.get(tenant_id, {})
-        if len(t) == 0:
-            return jsonify({'chunk_id': '-1', 'transcript': ''})
-        else:
+        with _transcript_lock:
+            t = transcriptd.get(tenant_id, {})
+            if len(t) == 0:
+                return jsonify({'chunk_id': '-1', 'transcript': ''})
             sentences = request.args.get('sentences', default='false') == 'true'
-            if sentences == 'true': t = merge_and_split_transcripts(t)
+            if sentences == 'true':
+                t = merge_and_split_transcripts(t)
             untilid = request.args.get('until', default=str(int(time.time() * 1000)))
             latest_chunk_id = next((k for k in sorted(t.keys(), reverse=True) if int(k) < int(untilid)), None)
             latest_transcript = t.pop(latest_chunk_id)['transcript']
@@ -462,14 +546,15 @@ class DeleteTranscript(Resource):
         delete a transcript for a given tenant_id and chunk_id 
         '''
         tenant_id = request.args.get('tenant_id', '0000')
-        t = transcriptd.get(tenant_id, {})
-        sentences = request.args.get('sentences', default='false') == 'true'
-        if sentences == 'true': t = merge_and_split_transcripts(t)
-        chunk_id = request.args.get('chunk_id')
-        if chunk_id in t:
-            entry = t.pop(chunk_id, None)
-            return jsonify({'chunk_id': chunk_id, 'transcript': entry['transcript']})
-        else:
+        with _transcript_lock:
+            t = transcriptd.get(tenant_id, {})
+            sentences = request.args.get('sentences', default='false') == 'true'
+            if sentences == 'true':
+                t = merge_and_split_transcripts(t)
+            chunk_id = request.args.get('chunk_id')
+            if chunk_id in t:
+                entry = t.pop(chunk_id, None)
+                return jsonify({'chunk_id': chunk_id, 'transcript': entry['transcript']})
             return jsonify({'chunk_id': chunk_id, 'transcript': ''})
 
 @api.route('/list_transcripts')
@@ -487,13 +572,15 @@ class ListTranscripts(Resource):
         list all transcripts for a given tenant_id
         '''
         tenant_id = request.args.get('tenant_id', '0000')
-        t = transcriptd.get(tenant_id, {})
-        sentences = request.args.get('sentences', default='false') == 'true'
-        if sentences == 'true': t = merge_and_split_transcripts(t)
-        fromid = request.args.get('from', default='0')
-        untilid = request.args.get('until', default=str(int(time.time() * 1000)))
-        list = {k: v for k, v in t.items() if int(fromid) <= int(k) <= int(untilid)}
-        return jsonify(list)
+        with _transcript_lock:
+            t = transcriptd.get(tenant_id, {})
+            sentences = request.args.get('sentences', default='false') == 'true'
+            if sentences == 'true':
+                t = merge_and_split_transcripts(t)
+            fromid = request.args.get('from', default='0')
+            untilid = request.args.get('until', default=str(int(time.time() * 1000)))
+            list = {k: v for k, v in t.items() if int(fromid) <= int(k) <= int(untilid)}
+            return jsonify(list)
   
 @api.route('/transcripts_size')
 class TranscriptsSize(Resource):
@@ -510,17 +597,40 @@ class TranscriptsSize(Resource):
         get the size of the transcripts for a given tenant_id  
         '''
         tenant_id = request.args.get('tenant_id', '0000')
-        t = transcriptd.get(tenant_id, {})
-        sentences = request.args.get('sentences', default='false') == 'true'
-        if sentences == 'true': t = merge_and_split_transcripts(t)
-        fromid = request.args.get('from', default='0')
-        untilid = request.args.get('until', default=str(int(time.time() * 1000)))
-        t = {k: v for k, v in t.items() if int(fromid) <= int(k) <= int(untilid)}
-        return jsonify({'size': len(t)})
+        with _transcript_lock:
+            t = transcriptd.get(tenant_id, {})
+            sentences = request.args.get('sentences', default='false') == 'true'
+            if sentences == 'true':
+                t = merge_and_split_transcripts(t)
+            fromid = request.args.get('from', default='0')
+            untilid = request.args.get('until', default=str(int(time.time() * 1000)))
+            t = {k: v for k, v in t.items() if int(fromid) <= int(k) <= int(untilid)}
+            return jsonify({'size': len(t)})
+
+
+def get_transcript_for_ws(tenant_id: str, chunk_id: str) -> str:
+    """Read current transcript text for finalize_chunk WebSocket control messages."""
+    with _transcript_lock:
+        row = transcriptd.get(tenant_id, {}).get(chunk_id)
+    if isinstance(row, dict):
+        return row.get("transcript", "") or ""
+    return ""
+
+
+@sock.route("/stt/stream")
+def stt_stream(ws):
+    """Real-time STT: send JSON audio messages; receive transcript events (see streaming_stt_ws)."""
+    from streaming_stt_ws import run_stt_stream
+
+    run_stt_stream(
+        ws,
+        request,
+        enqueue_audio=lambda t, c, a, s: try_enqueue(audio_stack, (t, c, a, s)),
+        ensure_worker=ensure_process_audio_thread,
+        get_transcript=get_transcript_for_ws,
+    )
+
 
 if __name__ == '__main__':
-    # Start the audio processing thread
-    threading.Thread(target=process_audio).start()
-
-    # start the server
-    app.run(host='0.0.0.0', port=5040, debug=True)
+    ensure_process_audio_thread()
+    app.run(host='0.0.0.0', port=5055, debug=False)
