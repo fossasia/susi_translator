@@ -443,4 +443,4 @@ class TranscriptsSize(Resource):
 
 if __name__ == '__main__':
     threading.Thread(target=process_audio, daemon=True).start()
-    app.run(host='0.0.0.0', port=5000, debug=False)
+    app.run(host='0.0.0.0', port=5040, debug=False)
