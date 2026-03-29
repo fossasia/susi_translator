@@ -88,7 +88,7 @@ class AudioGrabber:
             session.mount('http://', adapter)
             session.mount('https://', adapter)
             headers = {'Content-Type': 'application/json'}  # Ensure correct header
-            response = session.post('http://localhost:5000/transcribe', json=data)
+            response = session.post('http://localhost:5040/transcribe', json=data)
         
             if response.status_code == 200:
                 print(f'Sent chunk {self.chunk_id} with {len(self.buffer)} bytes')
