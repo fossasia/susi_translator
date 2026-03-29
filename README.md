@@ -1,8 +1,7 @@
 # Real-time Audio Transcription
 
 ## Purpose
-This project aims to provide a real-time audio transcription system, where audio input from a microphone is sent to a server, transcribed, and then displayed to the user in real-time. The project uses a server to do the heavy calculations to do the actual transcription while a lightweight
-client just does the audio recording and another client just does the result display.
+This project aims to provide a real-time audio transcription system, where audio input from a microphone is sent to a server, transcribed, and then displayed to the user in real-time. The project uses a server to do the heavy calculations to do the actual transcription while a lightweight client just does the audio recording and another client just does the result display.
 
 ## Python Files
 
@@ -31,14 +30,21 @@ This file contains the client-side logic, which:
 - Listens to the server for transcribed chunks
 - Displays the transcribed text to the user in real-time
 
+
+## Requirements
+
+### Python Version
+- **Recommended: Python 3.11**
+- Python 3.14+ is not supported - too new for most required packages
+
 ## Setup and Run
 
 To set up and run the project, follow these steps:
 
-* Install the required Python packages: pyaudio, flask, requests, whisper
+* Install the required Python packages: pyaudio, flask, requests, whisper, flask-restx, flask-cors
 * Run `audio_grabber.py` to start capturing audio from the microphone
 * Run `transcribe_server.py` to start the server
-* Open `transcribe_listener.py` in the browser to start displaying transcribed text in real-time
+* Open `transcribe_listener.html` in the browser to start displaying transcribed text in real-time
 
 ```
 ./server -m models/ggml-large-v3.bin -l de -p 16 -t 32 --host 0.0.0.0 --port 8007
