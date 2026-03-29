@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <!--
 Copyright [2024] [Michael Peter Christen, mc@yacy.net]
 
@@ -15,6 +16,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 -->
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -24,6 +26,7 @@ limitations under the License.
             font-family: Arial, sans-serif;
             text-align: center;
         }
+
         canvas {
             border: 1px solid black;
             margin: 20px auto;
@@ -31,10 +34,11 @@ limitations under the License.
         }
     </style>
 </head>
+
 <body>
     <h1>Audio Grabber</h1>
     <input type="text" id="serverhost" placeholder="Transcribe Host" value="localhost">
-    <input type="text" id="serverport" placeholder="Transcribe Port" value="5040">
+    <input type="text" id="serverport" placeholder="Transcribe Port" value="5000">
     <select id="audioInputSelect"></select>
     <button id="startBtn">Start</button>
     <button id="stopBtn" disabled>Stop</button>
@@ -161,6 +165,18 @@ limitations under the License.
             return maxVal < SILENCE_THRESHOLD / 32767; // Convert to 16-bit equivalent threshold
         }
 
+        // getCookie: Retrieves a cookie value by name.
+        // Used to get the CSRF token for Django backends.
+        // Returns null if the cookie is not found (e.g. when using Flask).
+        function getCookie(name) {
+            const cookies = document.cookie.split(';');
+            for (let cookie of cookies) {
+                const [key, value] = cookie.trim().split('=');
+                if (key === name) return decodeURIComponent(value);
+            }
+            return null;
+        }
+
         function sendChunk() {
             const int16Array = new Int16Array(buffer.map(n => n * 32767));
             const audioBuffer = new Blob([int16Array.buffer], { type: 'audio/wav' });
@@ -174,11 +190,15 @@ limitations under the License.
                 const serverhost = document.getElementById('serverhost').value;
                 const serverport = document.getElementById('serverport').value;
                 const transcribeurl = `http://${serverhost}:${serverport}/transcribe`;
+
+                // Get CSRF token if available (required for Django, null for Flask)
                 const csrftoken = getCookie('csrftoken');
+                const headers = { 'Content-Type': 'application/json' };
+                if (csrftoken) headers['X-CSRFToken'] = csrftoken;
 
                 fetch(transcribeurl, {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: headers,
                     body: JSON.stringify(data)
                 })
                     .then(response => {
@@ -252,4 +272,5 @@ limitations under the License.
         }
     </script>
 </body>
+
 </html>
