@@ -32,16 +32,36 @@ limitations under the License.
             margin: 20px auto;
             display: block;
         }
+
+        #controls {
+            margin: 10px auto;
+        }
+
+        #controls label {
+            font-size: 14px;
+            margin-right: 4px;
+        }
+
+        #controls select {
+            margin-right: 10px;
+        }
     </style>
 </head>
 
 <body>
     <h1>Audio Grabber</h1>
-    <input type="text" id="serverhost" placeholder="Transcribe Host" value="localhost">
-    <input type="text" id="serverport" placeholder="Transcribe Port" value="5000">
-    <select id="audioInputSelect"></select>
-    <button id="startBtn">Start</button>
-    <button id="stopBtn" disabled>Stop</button>
+    <div id="controls">
+        <input type="text" id="serverhost" placeholder="Transcribe Host" value="localhost">
+        <input type="text" id="serverport" placeholder="Transcribe Port" value="5000">
+        <label for="backendSelect">Backend:</label>
+        <select id="backendSelect">
+            <option value="flask">Flask</option>
+            <option value="django">Django</option>
+        </select>
+        <select id="audioInputSelect"></select>
+        <button id="startBtn">Start</button>
+        <button id="stopBtn" disabled>Stop</button>
+    </div>
     <canvas id="spectrogram" width="800" height="50"></canvas>
     <canvas id="volumeMeter" width="800" height="50"></canvas>
 
@@ -166,7 +186,7 @@ limitations under the License.
         }
 
         // getCookie: Retrieves a cookie value by name.
-        // Used to get the CSRF token for Django backends.
+        // Used to get the Django CSRF token for secure POST requests.
         // Returns null if the cookie is not found (e.g. when using Flask).
         function getCookie(name) {
             const cookies = document.cookie.split(';');
@@ -191,8 +211,10 @@ limitations under the License.
                 const serverport = document.getElementById('serverport').value;
                 const transcribeurl = `http://${serverhost}:${serverport}/transcribe`;
 
-                // Get CSRF token if available (required for Django, null for Flask)
-                const csrftoken = getCookie('csrftoken');
+                // Get CSRF token only when Django backend is selected.
+                // Flask does not use CSRF tokens so the header is skipped.
+                const backend = document.getElementById('backendSelect').value;
+                const csrftoken = backend === 'django' ? getCookie('csrftoken') : null;
                 const headers = { 'Content-Type': 'application/json' };
                 if (csrftoken) headers['X-CSRFToken'] = csrftoken;
 
@@ -229,11 +251,9 @@ limitations under the License.
             const width = spectrogramCanvas.width;
             const height = spectrogramCanvas.height;
 
-            // Shift existing image to the left
             const imageData = spectrogramCtx.getImageData(1, 0, width - 1, height);
             spectrogramCtx.putImageData(imageData, 0, 0);
 
-            // Draw new frequency data on the right
             for (let i = 0; i < height; i++) {
                 const value = freqData[i];
                 spectrogramCtx.fillStyle = getColor(value);
@@ -252,19 +272,15 @@ limitations under the License.
             const width = volumeMeterCanvas.width;
             const height = volumeMeterCanvas.height;
 
-            // Shift existing image to the left
             const imageData = volumeMeterCtx.getImageData(1, 0, width - 1, height);
             volumeMeterCtx.putImageData(imageData, 0, 0);
 
-            // Calculate volume
             const volume = Math.sqrt(timeData.reduce((sum, value) => sum + Math.pow(value - 128, 2), 0) / timeData.length);
             const volumeHeight = (volume / 32) * height;
 
-            // Clear the volume on the right with blue color
             volumeMeterCtx.fillStyle = 'grey';
             volumeMeterCtx.fillRect(width - 1, 0, 1, height);
 
-            // Draw new volume level on the right
             volumeMeterCtx.fillStyle = 'black';
             volumeMeterCtx.fillRect(width - 1, height - volumeHeight, 1, volumeHeight);
 
