@@ -29,7 +29,7 @@ django-cors-headers>=4.0.0
 djangorestframework>=3.14.0
 drf-yasg>=1.21.0
 
-# Documentation
+# Documentation:
 mkdocs>=1.5.0
 mkdocs-bootswatch>=1.1
 
