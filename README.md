@@ -39,13 +39,27 @@ This file contains the client-side logic, which:
 
 ## Setup and Run
 
-To set up and run the project, follow these steps:
+### Option A — pip (classic)
+```bash
+pip install -r requirements.txt
+```
 
-* Install the required Python packages: pyaudio, flask, requests, whisper, flask-restx, flask-cors
+### Option B — uv (recommended, faster)
+
+[uv](https://github.com/astral-sh/uv) is a fast Python package manager. Install it first:
+```bash
+# macOS / Linux
+curl -Ls https://astral.sh/uv/install.sh | sh
+
+# Windows (PowerShell)
+powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
+```
+
+Then install dependencies:
+```bash
+uv sync
+```
+
 * Run `audio_grabber.py` to start capturing audio from the microphone
 * Run `transcribe_server.py` to start the server
 * Open `transcribe_listener.html` in the browser to start displaying transcribed text in real-time
-
-```
-./server -m models/ggml-large-v3.bin -l de -p 16 -t 32 --host 0.0.0.0 --port 8007
-```
