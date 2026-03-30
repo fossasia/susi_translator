@@ -1,0 +1,56 @@
+[project]
+name = "susi-translator"
+version = "1.0.0"
+description = "Real-time audio transcription server using whisper.cpp — part of FOSSASIA/SUSI.AI"
+
+# Python version requirement
+requires-python = ">=3.11"
+
+# Core dependencies
+dependencies = [
+    # Core server (Flask backend)
+    "flask>=2.3.0",
+    "flask-restx>=1.3.0",
+    "flask-cors>=4.0.0",
+
+    # Audio capture
+    "pyaudio>=0.2.14",
+
+    # Transcription (Whisper)
+    "openai-whisper>=20231117",
+
+    # Machine Learning dependencies (required for Whisper)
+    "numpy>=1.24.0",
+    "scipy>=1.10.0",
+    "torch>=2.0.0",
+
+    # HTTP requests
+    "requests>=2.31.0",
+
+    # Environment config
+    "python-dotenv>=1.0.0",
+
+    # Django backend (alternative to Flask)
+    "django>=4.2.0",
+    "django-cors-headers>=4.0.0",
+    "djangorestframework>=3.14.0",
+    "drf-yasg>=1.21.0",
+
+    # Documentation
+    "mkdocs>=1.5.0",
+    "mkdocs-bootswatch>=1.1",
+
+    # Templating
+    "pybars3>=0.9.7",
+]
+
+[project.urls]
+Homepage = "https://github.com/susiai/susi_translator"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+# uv package manager configuration
+[tool.uv]
+dev-dependencies = []

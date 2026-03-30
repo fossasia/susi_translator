@@ -1,10 +1,37 @@
-django
-django-cors-headers
-djangorestframework
-drf_yasg
-mkdocs
-mkdocs-bootswatch
-openai-whisper
-pyaudio
-pybars3
-requests
+# susi_translator dependencies
+# Python >= 3.11 required
+
+# Core server (Flask backend)
+flask>=2.3.0
+flask-restx>=1.3.0
+flask-cors>=4.0.0
+
+# Audio capture
+pyaudio>=0.2.14
+
+# Transcription (local Whisper fallback, if not using whisper.cpp server)
+openai-whisper>=20231117
+
+# Machine Learning dependencies (required for Whisper)
+numpy>=1.24.0
+scipy>=1.10.0
+torch>=2.0.0
+
+# HTTP requests
+requests>=2.31.0
+
+# Environment config (for Issue #19)
+python-dotenv>=1.0.0
+
+# Django backend (alternative to Flask)
+django>=4.2.0
+django-cors-headers>=4.0.0
+djangorestframework>=3.14.0
+drf-yasg>=1.21.0
+
+# Documentation
+mkdocs>=1.5.0
+mkdocs-bootswatch>=1.1
+
+# Templating
+pybars3>=0.9.7
