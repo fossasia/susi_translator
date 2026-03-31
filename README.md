@@ -40,6 +40,31 @@ To set up and run the project, follow these steps:
 * Run `transcribe_server.py` to start the server
 * Open `transcribe_listener.py` in the browser to start displaying transcribed text in real-time
 
+## GSoC 2026 Proposal: Real-Time AI Live-Interpretation
+
+### Overview
+This proposal aims to transition the **SUSI Translator** into a high-performance, real-time interpretation engine for the `eventyay-video` ecosystem. By moving from batch processing to a **Streaming Inference Pipeline**, we can achieve sub-second latency for live event subtitles.
+
+### Proposed 3-Tier Architecture
+To minimize latency and handle high-throughput event data, I am implementing a modular system:
+
+1.  **Audio Ingestion (Client):** A lightweight Flutter/Web-based "Audio Grabber" that chunks live microphone input into 500ms - 2000ms segments.
+2.  **Inference Server (Core):** A Python-based backend utilizing `faster-whisper` and `ggml-large-v3` models. This server handles VAD (Voice Activity Detection) and asynchronous transcription.
+3.  **Real-Time Listener (UI):** A WebSocket-driven interface that overlays translated subtitles directly onto the live video player.
+
+### Setup Prototyping (Preview)
+Initial logic for the real-time transcription workflow:
+* **Server:** `transcribe_server.py` using Whisper for rapid chunk-to-text conversion.
+* **Client:** `audio_grabber.py` for capturing and routing unique chunk IDs to the inference engine.
+* **Frontend:** `transcribe_listener.html` for low-latency subtitle display via WebSockets.
+
+### Roadmap
+* **Phase 1:** Optimize the Whisper backend for `task='translate'` to support multilingual live interpretation.
+* **Phase 2:** Integrate `eventyay-video` components with the WebSocket stream for seamless UI overlays.
+* **Phase 3:** Implement load-balancing for high-concurrency event environments.
+
+---
+**Contributor:** Aryan Subudhi (GSoC 2026 Applicant)
 ```
 ./server -m models/ggml-large-v3.bin -l de -p 16 -t 32 --host 0.0.0.0 --port 8007
 ```
