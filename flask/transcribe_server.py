@@ -250,7 +250,7 @@ def merge_and_split_transcripts(transcripts):
 
     # add the last part of the merged transcript
     if merged_transcripts:
-        last_key = transcripts.keys()[-1]
+        last_key = list(transcripts.keys())[-1]
         p = result.get(last_key)
         if p:
             result[last_key] = p + " " + merged_transcripts
