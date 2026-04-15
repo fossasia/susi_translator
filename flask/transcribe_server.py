@@ -250,6 +250,7 @@ def merge_and_split_transcripts(transcripts):
 
     # add the last part of the merged transcript
     if merged_transcripts:
+        # dict.keys() returns a view in Python 3, not a list. so we wrap with list() to allow index access
         last_key = list(transcripts.keys())[-1]
         p = result.get(last_key)
         if p:
