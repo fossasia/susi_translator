@@ -125,3 +125,27 @@ STATIC_ROOT   = BASE_DIR / 'staticfiles'
 STATICFILES_DIRS = [BASE_DIR / 'static']
 APPEND_SLASH = False # most stupid default setting ever
 DEBUG = True
+
+# ---------------------------------------------------------------------------
+# Celery + Redis configuration
+# ---------------------------------------------------------------------------
+# Set USE_CELERY=true to replace the in-process threading.Thread queue with
+# Celery workers backed by Redis.  When false (default) the original
+# threading-based approach is used and no Redis dependency is required.
+
+USE_CELERY = os.getenv('USE_CELERY', 'false').lower() == 'true'
+
+# Redis connection URL (used as both Celery broker and transcript store)
+REDIS_URL = os.getenv('REDIS_URL', 'redis://localhost:6379/0')
+
+# Celery settings (only relevant when USE_CELERY=true)
+CELERY_BROKER_URL = os.getenv('CELERY_BROKER_URL', REDIS_URL)
+CELERY_RESULT_BACKEND = os.getenv('CELERY_RESULT_BACKEND', REDIS_URL)
+CELERY_ACCEPT_CONTENT = ['json']
+CELERY_TASK_SERIALIZER = 'json'
+CELERY_RESULT_SERIALIZER = 'json'
+CELERY_TIMEZONE = 'UTC'
+CELERY_TASK_TRACK_STARTED = True
+CELERY_TASK_TIME_LIMIT = 120          # hard kill after 2 minutes
+CELERY_TASK_SOFT_TIME_LIMIT = 90      # raise SoftTimeLimitExceeded after 90s
+CELERY_WORKER_PREFETCH_MULTIPLIER = 1 # one task at a time per worker (GPU bound)

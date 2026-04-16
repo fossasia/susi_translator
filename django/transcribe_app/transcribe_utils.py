@@ -2,23 +2,45 @@
 # (C) Michael Peter Christen 2024
 # Licensed under Apache License Version 2.0
 
+"""
+Core transcription utilities.
+
+This module provides:
+  • Audio queue management (``add_to_audio_stack``, ``process_audio``)
+  • Transcript storage access (``get_transcripts``)
+  • Validation (``is_valid``)
+  • Translation helpers (``translate``, ``translate_with_llm``)
+  • Sentence merging (``merge_and_split_transcripts``)
+
+When ``USE_CELERY=true`` the ``add_to_audio_stack`` function dispatches a
+Celery task instead of pushing to the in-process ``queue.Queue()``, and the
+blocking ``process_audio()`` loop is *not* started.
+"""
+
 import os
 import io
 import numpy as np
 import threading
 import requests
 import logging
-import whisper
 import base64
 import queue
-import torch
 import json
 import time
 from scipy.io.wavfile import write as wav_write
 
 logger = logging.getLogger(__name__)
 
-# we either use a local in-code model or access a whisper.cpp server
+# ---------------------------------------------------------------------------
+# Feature flag
+# ---------------------------------------------------------------------------
+
+use_celery = os.getenv('USE_CELERY', 'false').lower() == 'true'
+
+# ---------------------------------------------------------------------------
+# Whisper model configuration
+# ---------------------------------------------------------------------------
+
 use_whisper_server = os.getenv('WHISPER_SERVER_USE', 'true') == 'true'
 #model_name = os.getenv('WHISPER_MODEL', 'tiny')     # 39M
 #model_name = os.getenv('WHISPER_MODEL', 'base')     # 74M
@@ -26,66 +48,114 @@ model_fast_name = os.getenv('WHISPER_MODEL', 'small')    # 244M
 model_smart_name = os.getenv('WHISPER_MODEL', 'medium')   # 769M
 #model_name = os.getenv('WHISPER_MODEL', 'large-v3') # 1550M
 
-translation_cache = {}
+# ---------------------------------------------------------------------------
+# Translation state
+# ---------------------------------------------------------------------------
+
 translation_ongoing = False
 
-# In-memory storage for transcripts
-transcriptsd = {} # dictionary of objects; the key is the tenant_id and the value is a dictionary with the chunk_id as key and the transcript as value
-audio_stacks = {} # a dictionary of queues; the key is the tenant_id and the value is the queue, a queue.Queue() object
+# ---------------------------------------------------------------------------
+# Pluggable transcript store
+# ---------------------------------------------------------------------------
 
-if use_whisper_server:
-    # Use the whisper.cpp server
-    # this requires to start the server with the following command:
-    # cd whisper.cpp
-    # bash ./models/download-ggml-model.sh small
-    # bash ./models/download-ggml-model.sh medium
-    # bash ./models/download-ggml-model.sh large-v3
-    # ./server -m models/ggml-medium.bin -l de -p 16 -t 32 --host 0.0.0.0 --port 8007
-    # ./server -m models/ggml-large-v3.bin -l de -p 16 -t 32 --host 0.0.0.0 --port 8007
-    whisper_server = os.getenv('WHISPER_SERVER', 'https://whisper.susi.ai')
+from .transcript_store import store as _store
+
+# ---------------------------------------------------------------------------
+# Legacy in-memory state (used only when USE_CELERY=false)
+# ---------------------------------------------------------------------------
+
+if not use_celery:
+    # In-memory storage for transcripts
+    transcriptsd = {} # dictionary of objects; the key is the tenant_id and the value is a dictionary with the chunk_id as key and the transcript as value
+    audio_stacks = {} # a dictionary of queues; the key is the tenant_id and the value is the queue, a queue.Queue() object
+
+    if use_whisper_server:
+        # Use the whisper.cpp server
+        # this requires to start the server with the following command:
+        # cd whisper.cpp
+        # bash ./models/download-ggml-model.sh small
+        # bash ./models/download-ggml-model.sh medium
+        # bash ./models/download-ggml-model.sh large-v3
+        # ./server -m models/ggml-medium.bin -l de -p 16 -t 32 --host 0.0.0.0 --port 8007
+        # ./server -m models/ggml-large-v3.bin -l de -p 16 -t 32 --host 0.0.0.0 --port 8007
+        whisper_server = os.getenv('WHISPER_SERVER', 'https://whisper.susi.ai')
+    else:
+        # Download a whisper model. If the download using the whisper library is not possible
+        # i.e. if you are offline or behind a firewall, you can also use locally stored models.
+        # To use a local model, download a model from the links as listed in
+        # https://github.com/openai/whisper/blob/main/whisper/__init__.py#L17-L30
+        import whisper
+        import torch
+
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+
+        # load or download model
+        # the possible model path is models_path + "/" + model_name + ".pt"
+        # check if the model exists in the models_path
+        models_path = os.path.join(script_dir, 'models')
+        if os.path.exists(os.path.join(models_path, model_fast_name + ".pt")):
+            model_fast = whisper.load_model(model_fast_name, in_memory=True, download_root=models_path)
+        else:
+            model_fast = whisper.load_model(model_fast_name, in_memory=True)
+        if os.path.exists(os.path.join(models_path, model_smart_name + ".pt")):
+            model_smart = whisper.load_model(model_smart_name, in_memory=True, download_root=models_path)
+        else:
+            model_smart = whisper.load_model(model_smart_name, in_memory=True)
 else:
-    # Download a whisper model. If the download using the whisper library is not possible
-    # i.e. if you are offline or behind a firewall, you can also use locally stored models.
-    # To use a local model, download a model from the links as listed in
-    # https://github.com/openai/whisper/blob/main/whisper/__init__.py#L17-L30
+    whisper_server = os.getenv('WHISPER_SERVER', 'https://whisper.susi.ai')
+    logger.info("Celery mode enabled — audio processing delegated to Celery workers")
 
 
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-
-    # load or download model
-    # the possible model path is models_path + "/" + model_name + ".pt"
-    # check if the model exists in the models_path
-    models_path = os.path.join(script_dir, 'models')
-    if os.path.exists(os.path.join(models_path, model_fast_name + ".pt")):
-        model_fast = whisper.load_model(model_fast_name, in_memory=True, download_root=models_path)
-    else:
-        model_fast = whisper.load_model(model_fast_name, in_memory=True)
-    if os.path.exists(os.path.join(models_path, model_smart_name + ".pt")):
-        model_smart = whisper.load_model(model_smart_name, in_memory=True, download_root=models_path)
-    else:
-        model_smart = whisper.load_model(model_smart_name, in_memory=True)
+# ---------------------------------------------------------------------------
+# Public API — called by views.py
+# ---------------------------------------------------------------------------
 
 def add_to_audio_stack(tenant_id, chunk_id, audio_b64, translate_from, translate_to):
     """
-    Add an audio chunk to the queue for the given tenant.
+    Add an audio chunk to the processing pipeline.
+
+    In Celery mode this dispatches a ``process_audio_chunk`` task.
+    In legacy mode this pushes onto the in-process ``queue.Queue()``.
     """
-    with threading.Lock():
-        if tenant_id not in audio_stacks:
-            audio_stacks[tenant_id] = queue.Queue()
-        audio_stacks[tenant_id].put((chunk_id, audio_b64, translate_from, translate_to))
+    if use_celery:
+        from .tasks import process_audio_chunk
+        process_audio_chunk.delay(tenant_id, chunk_id, audio_b64, translate_from, translate_to)
+    else:
+        with threading.Lock():
+            if tenant_id not in audio_stacks:
+                audio_stacks[tenant_id] = queue.Queue()
+            audio_stacks[tenant_id].put((chunk_id, audio_b64, translate_from, translate_to))
+
 
 def get_transcripts(tenant_id):
     """
     Retrieve transcripts for the given tenant.
-    """
-    with threading.Lock():
-        return transcriptsd.get(tenant_id, {})
 
-# Process audio data
+    In Celery mode this reads from the shared Redis-backed store.
+    In legacy mode this reads from the in-process dictionary.
+    """
+    if use_celery:
+        return _store.get_transcripts(tenant_id)
+    else:
+        with threading.Lock():
+            return transcriptsd.get(tenant_id, {})
+
+
+# ---------------------------------------------------------------------------
+# Legacy background processing loop (only used when USE_CELERY=false)
+# ---------------------------------------------------------------------------
+
 def process_audio():
     """
     Continuously process audio chunks for transcription.
+
+    This function runs in a daemon thread when USE_CELERY=false.
+    When USE_CELERY=true this function is never called — Celery
+    workers handle transcription via ``tasks.process_audio_chunk``.
     """
+    if use_celery:
+        return  # Celery workers handle this
+
     while True:
         with threading.Lock():
             # we iterate over alle tenant_ids in the audio_stacks
@@ -162,6 +232,7 @@ def process_audio():
                         else:
                             print(f"Error: {response.status_code}, {response.text}")
                     else:
+                        import torch
                         # Convert int16 to float32 and normalize
                         audio_array = audio_array.astype(np.float32) / 32768.0
                         # Convert to PyTorch tensor
@@ -277,6 +348,11 @@ def clean_old_transcripts():
     """
     Clean up transcripts that are older than two hours.
     """
+    if use_celery:
+        # In Celery mode the periodic task handles this
+        _store.cleanup_old()
+        return
+
     current_time = int(time.time() * 1000)  # Current time in milliseconds
     two_hours_ago = current_time - (2 * 60 * 60 * 1000)  # Two hours ago in milliseconds
     with threading.Lock():
@@ -353,7 +429,7 @@ def merge_and_split_transcripts1(transcripts):
 def translate_with_llm(text, target_language):
     # first try to translate from the cache
     cachekey = target_language + ":" + text
-    cached_translation = translation_cache.get(cachekey, '')
+    cached_translation = _store.get_cached_translation(cachekey) if use_celery else translation_cache_legacy.get(cachekey, '')
     if len(cached_translation) > 0: return cached_translation
 
     # asl a llm to make the translation
@@ -396,7 +472,10 @@ def translate_with_llm(text, target_language):
             try:
                 answer_object = json.loads(content)
                 translation = answer_object.get('translation', '')
-                translation_cache[cachekey] = translation
+                if use_celery:
+                    _store.set_cached_translation(cachekey, translation)
+                else:
+                    translation_cache_legacy[cachekey] = translation
                 return translation
             except json.JSONDecodeError as e:
                 logger.error(f"Error parsing translation response: {str(e)}")
@@ -407,6 +486,9 @@ def translate_with_llm(text, target_language):
         logger.error(f"Error during translation request: {str(e)}")
         return None
 
+# Legacy in-memory translation cache (used when USE_CELERY=false)
+translation_cache_legacy = {}
+
 def translate(text, source_language, target_language):
     """
     Translate the given text from source_language to target_language.
@@ -414,7 +496,10 @@ def translate(text, source_language, target_language):
     global translation_ongoing
     # first try to translate from the cache
     cachekey = source_language + ":" + target_language + ":" + text
-    cached_translation = translation_cache.get(cachekey, '')
+    if use_celery:
+        cached_translation = _store.get_cached_translation(cachekey)
+    else:
+        cached_translation = translation_cache_legacy.get(cachekey, '')
     if len(cached_translation) > 0: return cached_translation
     translation_ongoing = True
     try:
@@ -435,7 +520,10 @@ def translate(text, source_language, target_language):
         translation_text = json_response.get('translation', '')
         if translation_text:
             logger.info(f"Translation took {time.time() - t0} seconds")
-            translation_cache[cachekey] = translation_text
+            if use_celery:
+                _store.set_cached_translation(cachekey, translation_text)
+            else:
+                translation_cache_legacy[cachekey] = translation_text
             translation_ongoing = False
             return translation_text
         else:

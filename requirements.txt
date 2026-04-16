@@ -1,3 +1,4 @@
+celery[redis]
 django
 django-cors-headers
 djangorestframework
@@ -7,4 +8,5 @@ mkdocs-bootswatch
 openai-whisper
 pyaudio
 pybars3
+redis
 requests

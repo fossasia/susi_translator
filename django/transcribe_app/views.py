@@ -9,7 +9,7 @@ from rest_framework import status
 from rest_framework.parsers import JSONParser
 from drf_yasg.utils import swagger_auto_schema
 from drf_yasg import openapi
-from .transcribe_utils import get_transcripts, add_to_audio_stack, process_audio, merge_and_split_transcripts, translate, logger
+from .transcribe_utils import get_transcripts, add_to_audio_stack, process_audio, merge_and_split_transcripts, translate, logger, use_celery
 from .serializers import (
     TranscribeInputSerializer,
     TranscribeResponseSerializer,
@@ -29,8 +29,9 @@ import pybars
 import time
 import os
 
-# Start the audio processing thread
-threading.Thread(target=process_audio).start()
+# Start the audio processing thread (legacy mode only)
+if not use_celery:
+    threading.Thread(target=process_audio, daemon=True).start()
 
 def home(request):
     return HttpResponse("Welcome to the Transcription API!")
