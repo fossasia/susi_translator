@@ -293,11 +293,8 @@ def clean_old_transcripts():
         # delete the tenant_ids
         for tenant_id in to_delete: transcriptsd.pop(tenant_id, None)
 
-def merge_and_split_transcripts(transcripts):
-    return transcripts
-
 # merge all transcripts into one and split them into sentences
-def merge_and_split_transcripts1(transcripts):
+def merge_and_split_transcripts(transcripts):
     # Iterate through the sorted transcript keys.
     sec = ".!?"
     merged_transcripts = ""
