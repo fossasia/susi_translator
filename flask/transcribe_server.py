@@ -300,36 +300,33 @@ class Transcribe(Resource):
     @api.response(200, 'Success', transcribe_response_model)
     @api.response(404, 'Transcript Not Found')
     def post(self):
-        '''
-        The /transcribe endpoint expects a stream of JSON objects with base64-encoded audio binaries.
-        Each chunk should have a unique chunk_id.
-        The server processes each chunk and transcribes the audio using Whisper.
-        '''
-        def generate_transcript():
-            while True:
-                chunk = request.stream.read(2048000)
-                if not chunk:
-                    break
-                try:
-                    data = json.loads(chunk)
-                    audio_b64 = data['audio_b64']
-                    chunk_id = data['chunk_id']
-                    tenant_id = data.get('tenant_id', '0000')
-                    audio_stack.put((tenant_id, chunk_id, audio_b64))
-                    #print("queue length: " + str(audio_stack.qsize()))
-                    response_data = {'chunk_id': chunk_id, 'tenant_id': tenant_id, 'status': 'processing'}
-                    #print("received chunk " + chunk_id + " with " + str(len(audio_b64)) + " bytes")
-                    yield f"data: {json.dumps(response_data)}\n\n".encode('utf-8')
-                except json.JSONDecodeError:
-                    logger.error("JSON decode error", exc_info=True)
-                    continue
+        try:
+            data = request.get_json(force=True)
 
-        # Log request details
-        #print(f"Request Headers: {request.headers}")
-        #print(f"Request Method: {request.method}")
-        #print(f"Request Body: {request.get_data()}")
-        #logger.info(f"Received transcribe request with headers: {request.headers}")
-        return Response(stream_with_context(generate_transcript()), content_type='text/event-stream')
+            if not data:
+                return {"error": "No JSON payload received"}, 400
+
+            audio_b64 = data.get('audio_b64')
+            chunk_id = data.get('chunk_id')
+            tenant_id = data.get('tenant_id', '0000')
+
+            if not audio_b64 or not chunk_id:
+                return {"error": "Missing required fields"}, 400
+
+            # push to processing queue
+            audio_stack.put((tenant_id, chunk_id, audio_b64))
+
+            response_data = {
+                "chunk_id": chunk_id,
+                "tenant_id": tenant_id,
+                "status": "processing"
+            }
+
+            return response_data, 200
+
+        except Exception as e:
+            logger.error("Error in /transcribe", exc_info=True)
+            return {"error": str(e)}, 500
 
 @api.route('/get_transcript')
 class GetTranscript(Resource):
