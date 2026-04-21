@@ -23,3 +23,10 @@ flask-cors
 # Utilities
 pybars3
 requests
+python-dotenv
+flask
+flask-restx
+flask-cors
+numpy
+torch
+scipy
