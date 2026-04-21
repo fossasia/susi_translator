@@ -12,6 +12,10 @@ import torch
 import json
 import time
 import os
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s %(levelname)s: %(message)s')
 logger = logging.getLogger(__name__)
@@ -28,6 +32,10 @@ use_whisper_server = os.getenv('WHISPER_SERVER_USE', 'false') == 'true'
 model_fast_name = os.getenv('WHISPER_MODEL', 'small')    # 244M
 model_smart_name = os.getenv('WHISPER_MODEL', 'medium')   # 769M
 #model_name = os.getenv('WHISPER_MODEL', 'large-v3') # 1550M
+
+# Detect hardware compatibility
+device = os.getenv('WHISPER_DEVICE', 'cuda' if torch.cuda.is_available() else 'cpu')
+logger.info(f"Hardware detection: using {device}")
 
 if use_whisper_server:
     # Use the whisper.cpp server
@@ -53,13 +61,13 @@ else:
     # check if the model exists in the models_path
     models_path = os.path.join(script_dir, 'models')
     if os.path.exists(os.path.join(models_path, model_fast_name + ".pt")):
-        model_fast = whisper.load_model(model_fast_name, in_memory=True, download_root=models_path)
+        model_fast = whisper.load_model(model_fast_name, device=device, in_memory=True, download_root=models_path)
     else:
-        model_fast = whisper.load_model(model_fast_name, in_memory=True)
+        model_fast = whisper.load_model(model_fast_name, device=device, in_memory=True)
     if os.path.exists(os.path.join(models_path, model_smart_name + ".pt")):
-        model_smart = whisper.load_model(model_smart_name, in_memory=True, download_root=models_path)
+        model_smart = whisper.load_model(model_smart_name, device=device, in_memory=True, download_root=models_path)
     else:
-        model_smart = whisper.load_model(model_smart_name, in_memory=True)
+        model_smart = whisper.load_model(model_smart_name, device=device, in_memory=True)
 
 # In-memory storage for transcripts
 transcriptd = {} # should be a dictionary of dictionaries; the key is the tenant_id and the value is a dictionary with the chunk_id as key and the transcript as value
