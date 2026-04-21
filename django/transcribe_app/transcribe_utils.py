@@ -136,7 +136,6 @@ def process_audio():
                         sample_rate = 16000
                         wav_write(wav_buffer, sample_rate, audio_array)
                         wav_buffer.seek(0)
-
                         # Prepare the request to the whisper server
                         files = {'file': ('audio.wav', wav_buffer, 'audio/wav')}
                         data = {
@@ -283,9 +282,14 @@ def clean_old_transcripts():
         # make a list of tenant_ids to delete
         to_delete = []
         # iterate over all dictionaries in transcriptd
-        for tenant_id in transcriptsd.keys():
-            transcripts = transcriptsd[tenant_id]
-            old_chunks = [chunk_id for chunk_id in transcripts if int(chunk_id) < two_hours_ago]
+        for tenant_id, transcripts in transcriptsd.items():
+            old_chunks = []
+            for chunk_id in transcripts:
+                try:
+                    if int(chunk_id) < two_hours_ago:
+                        old_chunks.append(chunk_id)
+                except ValueError:
+                    pass # Ignore non-numeric chunk IDs (e.g. debugging)
             for chunk_id in old_chunks: del transcripts[chunk_id]
             # its possible that the tenant_id has no more transcripts
             if len(transcripts) == 0: to_delete.append(tenant_id)
