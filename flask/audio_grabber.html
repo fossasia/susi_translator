@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <!--
 Copyright [2024] [Michael Peter Christen, mc@yacy.net]
 
@@ -15,6 +16,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 -->
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -24,20 +26,42 @@ limitations under the License.
             font-family: Arial, sans-serif;
             text-align: center;
         }
+
         canvas {
             border: 1px solid black;
             margin: 20px auto;
             display: block;
         }
+
+        #controls {
+            margin: 10px auto;
+        }
+
+        #controls label {
+            font-size: 14px;
+            margin-right: 4px;
+        }
+
+        #controls select {
+            margin-right: 10px;
+        }
     </style>
 </head>
+
 <body>
     <h1>Audio Grabber</h1>
-    <input type="text" id="serverhost" placeholder="Transcribe Host" value="localhost">
-    <input type="text" id="serverport" placeholder="Transcribe Port" value="5040">
-    <select id="audioInputSelect"></select>
-    <button id="startBtn">Start</button>
-    <button id="stopBtn" disabled>Stop</button>
+    <div id="controls">
+        <input type="text" id="serverhost" placeholder="Transcribe Host" value="localhost">
+        <input type="text" id="serverport" placeholder="Transcribe Port" value="5000">
+        <label for="backendSelect">Backend:</label>
+        <select id="backendSelect">
+            <option value="flask">Flask</option>
+            <option value="django">Django</option>
+        </select>
+        <select id="audioInputSelect"></select>
+        <button id="startBtn">Start</button>
+        <button id="stopBtn" disabled>Stop</button>
+    </div>
     <canvas id="spectrogram" width="800" height="50"></canvas>
     <canvas id="volumeMeter" width="800" height="50"></canvas>
 
@@ -161,6 +185,18 @@ limitations under the License.
             return maxVal < SILENCE_THRESHOLD / 32767; // Convert to 16-bit equivalent threshold
         }
 
+        // getCookie: Retrieves a cookie value by name.
+        // Used to get the Django CSRF token for secure POST requests.
+        // Returns null if the cookie is not found (e.g. when using Flask).
+        function getCookie(name) {
+            const cookies = document.cookie.split(';');
+            for (let cookie of cookies) {
+                const [key, value] = cookie.trim().split('=');
+                if (key === name) return decodeURIComponent(value);
+            }
+            return null;
+        }
+
         function sendChunk() {
             const int16Array = new Int16Array(buffer.map(n => n * 32767));
             const audioBuffer = new Blob([int16Array.buffer], { type: 'audio/wav' });
@@ -174,11 +210,17 @@ limitations under the License.
                 const serverhost = document.getElementById('serverhost').value;
                 const serverport = document.getElementById('serverport').value;
                 const transcribeurl = `http://${serverhost}:${serverport}/transcribe`;
-                const csrftoken = getCookie('csrftoken');
+
+                // Get CSRF token only when Django backend is selected.
+                // Flask does not use CSRF tokens so the header is skipped.
+                const backend = document.getElementById('backendSelect').value;
+                const csrftoken = backend === 'django' ? getCookie('csrftoken') : null;
+                const headers = { 'Content-Type': 'application/json' };
+                if (csrftoken) headers['X-CSRFToken'] = csrftoken;
 
                 fetch(transcribeurl, {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: headers,
                     body: JSON.stringify(data)
                 })
                     .then(response => {
@@ -209,11 +251,9 @@ limitations under the License.
             const width = spectrogramCanvas.width;
             const height = spectrogramCanvas.height;
 
-            // Shift existing image to the left
             const imageData = spectrogramCtx.getImageData(1, 0, width - 1, height);
             spectrogramCtx.putImageData(imageData, 0, 0);
 
-            // Draw new frequency data on the right
             for (let i = 0; i < height; i++) {
                 const value = freqData[i];
                 spectrogramCtx.fillStyle = getColor(value);
@@ -232,19 +272,15 @@ limitations under the License.
             const width = volumeMeterCanvas.width;
             const height = volumeMeterCanvas.height;
 
-            // Shift existing image to the left
             const imageData = volumeMeterCtx.getImageData(1, 0, width - 1, height);
             volumeMeterCtx.putImageData(imageData, 0, 0);
 
-            // Calculate volume
             const volume = Math.sqrt(timeData.reduce((sum, value) => sum + Math.pow(value - 128, 2), 0) / timeData.length);
             const volumeHeight = (volume / 32) * height;
 
-            // Clear the volume on the right with blue color
             volumeMeterCtx.fillStyle = 'grey';
             volumeMeterCtx.fillRect(width - 1, 0, 1, height);
 
-            // Draw new volume level on the right
             volumeMeterCtx.fillStyle = 'black';
             volumeMeterCtx.fillRect(width - 1, height - volumeHeight, 1, volumeHeight);
 
@@ -252,4 +288,5 @@ limitations under the License.
         }
     </script>
 </body>
+
 </html>
