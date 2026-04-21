@@ -12,6 +12,10 @@ import torch
 import json
 import time
 import os
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s %(levelname)s: %(message)s')
 logger = logging.getLogger(__name__)
@@ -28,6 +32,10 @@ use_whisper_server = os.getenv('WHISPER_SERVER_USE', 'false') == 'true'
 model_fast_name = os.getenv('WHISPER_MODEL', 'small')    # 244M
 model_smart_name = os.getenv('WHISPER_MODEL', 'medium')   # 769M
 #model_name = os.getenv('WHISPER_MODEL', 'large-v3') # 1550M
+
+# Detect hardware compatibility
+device = os.getenv('WHISPER_DEVICE', 'cuda' if torch.cuda.is_available() else 'cpu')
+logger.info(f"Hardware detection: using {device}")
 
 if use_whisper_server:
     # Use the whisper.cpp server
@@ -53,13 +61,13 @@ else:
     # check if the model exists in the models_path
     models_path = os.path.join(script_dir, 'models')
     if os.path.exists(os.path.join(models_path, model_fast_name + ".pt")):
-        model_fast = whisper.load_model(model_fast_name, in_memory=True, download_root=models_path)
+        model_fast = whisper.load_model(model_fast_name, device=device, in_memory=True, download_root=models_path)
     else:
-        model_fast = whisper.load_model(model_fast_name, in_memory=True)
+        model_fast = whisper.load_model(model_fast_name, device=device, in_memory=True)
     if os.path.exists(os.path.join(models_path, model_smart_name + ".pt")):
-        model_smart = whisper.load_model(model_smart_name, in_memory=True, download_root=models_path)
+        model_smart = whisper.load_model(model_smart_name, device=device, in_memory=True, download_root=models_path)
     else:
-        model_smart = whisper.load_model(model_smart_name, in_memory=True)
+        model_smart = whisper.load_model(model_smart_name, device=device, in_memory=True)
 
 # In-memory storage for transcripts
 transcriptd = {} # should be a dictionary of dictionaries; the key is the tenant_id and the value is a dictionary with the chunk_id as key and the transcript as value
@@ -250,7 +258,8 @@ def merge_and_split_transcripts(transcripts):
 
     # add the last part of the merged transcript
     if merged_transcripts:
-        last_key = transcripts.keys()[-1]
+        # dict.keys() returns a view in Python 3, not a list. so we wrap with list() to allow index access
+        last_key = list(transcripts.keys())[-1]
         p = result.get(last_key)
         if p:
             result[last_key] = p + " " + merged_transcripts
@@ -291,36 +300,33 @@ class Transcribe(Resource):
     @api.response(200, 'Success', transcribe_response_model)
     @api.response(404, 'Transcript Not Found')
     def post(self):
-        '''
-        The /transcribe endpoint expects a stream of JSON objects with base64-encoded audio binaries.
-        Each chunk should have a unique chunk_id.
-        The server processes each chunk and transcribes the audio using Whisper.
-        '''
-        def generate_transcript():
-            while True:
-                chunk = request.stream.read(2048000)
-                if not chunk:
-                    break
-                try:
-                    data = json.loads(chunk)
-                    audio_b64 = data['audio_b64']
-                    chunk_id = data['chunk_id']
-                    tenant_id = data.get('tenant_id', '0000')
-                    audio_stack.put((tenant_id, chunk_id, audio_b64))
-                    #print("queue length: " + str(audio_stack.qsize()))
-                    response_data = {'chunk_id': chunk_id, 'tenant_id': tenant_id, 'status': 'processing'}
-                    #print("received chunk " + chunk_id + " with " + str(len(audio_b64)) + " bytes")
-                    yield f"data: {json.dumps(response_data)}\n\n".encode('utf-8')
-                except json.JSONDecodeError:
-                    logger.error("JSON decode error", exc_info=True)
-                    continue
+        try:
+            data = request.get_json(force=True)
 
-        # Log request details
-        #print(f"Request Headers: {request.headers}")
-        #print(f"Request Method: {request.method}")
-        #print(f"Request Body: {request.get_data()}")
-        #logger.info(f"Received transcribe request with headers: {request.headers}")
-        return Response(stream_with_context(generate_transcript()), content_type='text/event-stream')
+            if not data:
+                return {"error": "No JSON payload received"}, 400
+
+            audio_b64 = data.get('audio_b64')
+            chunk_id = data.get('chunk_id')
+            tenant_id = data.get('tenant_id', '0000')
+
+            if not audio_b64 or not chunk_id:
+                return {"error": "Missing required fields"}, 400
+
+            # push to processing queue
+            audio_stack.put((tenant_id, chunk_id, audio_b64))
+
+            response_data = {
+                "chunk_id": chunk_id,
+                "tenant_id": tenant_id,
+                "status": "processing"
+            }
+
+            return response_data, 200
+
+        except Exception as e:
+            logger.error("Error in /transcribe", exc_info=True)
+            return {"error": str(e)}, 500
 
 @api.route('/get_transcript')
 class GetTranscript(Resource):

@@ -15,6 +15,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 -->
+
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -23,10 +24,12 @@ limitations under the License.
     body {
       margin: 0;
     }
+
     #header {
       padding: 10px;
       box-sizing: border-box;
     }
+
     #transcript-container {
       overflow-y: auto;
       border: 1px solid #ccc;
@@ -35,6 +38,7 @@ limitations under the License.
     }
   </style>
 </head>
+
 <body>
   <h1>Transcript Display</h1>
   <div id="header">
@@ -68,18 +72,41 @@ limitations under the License.
       fetch(get_latest_transcript_url)
         .then(response => response.json())
         .then(data => {
-          const chunkId = data.chunk_id;
-          const transcript = data.transcript;
+          // Backward Compatibility Check
+          if (data.chunk_id !== undefined) {
+            // 1. Legacy Flask Server Format
+            const chunkId = String(data.chunk_id);
+            const transcript = data.transcript || "";
+            if (chunkId === "-1" || !transcript.trim()) return;
 
-          if (chunkId !== latestChunkId) {
-            // New chunk ID, add a new line to the transcript container
-            const newLine = document.createElement('div');
-            newLine.textContent = transcript;
-            transcriptContainer.appendChild(newLine);
-            latestChunkId = chunkId;
+            if (chunkId !== latestChunkId) {
+              const newLine = document.createElement('div');
+              newLine.textContent = transcript;
+              transcriptContainer.appendChild(newLine);
+              latestChunkId = chunkId;
+            } else {
+              if (transcriptContainer.lastChild) {
+                transcriptContainer.lastChild.textContent = transcript;
+              }
+            }
           } else {
-            // Same chunk ID, update the existing transcript
-            transcriptContainer.lastChild.textContent = transcript;
+            // 2. New Django Server Format
+            const keys = Object.keys(data).sort();
+            if (keys.length === 0) return;
+
+            for (const chunkId of keys) {
+              const chunkData = data[chunkId];
+              const transcript = chunkData.original || chunkData.transcript || "";
+              if (!transcript) continue;
+
+              let lineDiv = document.getElementById('chunk-' + chunkId);
+              if (!lineDiv) {
+                lineDiv = document.createElement('div');
+                lineDiv.id = 'chunk-' + chunkId;
+                transcriptContainer.appendChild(lineDiv);
+              }
+              lineDiv.textContent = transcript;
+            }
           }
 
           // Scroll to the bottom of the transcript container
@@ -96,4 +123,5 @@ limitations under the License.
     setInterval(getLatestTranscript, 1000);
   </script>
 </body>
+
 </html>
