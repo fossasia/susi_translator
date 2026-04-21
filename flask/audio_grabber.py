@@ -70,10 +70,6 @@ class AudioGrabber:
         # Return the status code to continue the stream
         return audio_data, pyaudio.paContinue
     
-    def start(self):
-        self.send_thread = threading.Thread(target=self.send_audio)
-        self.send_thread.start()
-
     def is_silent(self, data):
         m = max(data)
         print(str(m))
@@ -105,6 +101,8 @@ class AudioGrabber:
 
     def start(self):
         self.stream.start_stream()
+        self.send_thread = threading.Thread(target=self.send_chunk)
+        self.send_thread.start()
 
     def stop(self):
         self.recording = False
