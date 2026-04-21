@@ -38,7 +38,7 @@ To set up and run the project, follow these steps:
 * Install the required Python packages: pyaudio, flask, requests, whisper
 * Run `audio_grabber.py` to start capturing audio from the microphone
 * Run `transcribe_server.py` to start the server
-* Open `transcribe_listener.py` in the browser to start displaying transcribed text in real-time
+* Open `transcribe_listener.html` in the browser to start displaying transcribed text in real-time
 
 ```
 ./server -m models/ggml-large-v3.bin -l de -p 16 -t 32 --host 0.0.0.0 --port 8007
