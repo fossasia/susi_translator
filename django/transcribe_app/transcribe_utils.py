@@ -298,61 +298,100 @@ def clean_old_transcripts():
         for tenant_id in to_delete: transcriptsd.pop(tenant_id, None)
 
 def merge_and_split_transcripts(transcripts):
-    return transcripts
-
-# merge all transcripts into one and split them into sentences
-def merge_and_split_transcripts1(transcripts):
-    # Iterate through the sorted transcript keys.
     sec = ".!?"
     merged_transcripts = ""
     result = {}
     for chunk_id in transcripts.keys():
         transcript_event = transcripts[chunk_id]
         if not merged_transcripts:
-            # If merged_transcripts is empty, start with the first transcript.
             merged_transcripts += transcript_event['transcript'].strip()
         else:
-            # Append the transcript to the merged string with a space and lowercase the following first character.
             t = transcript_event['transcript'].strip()
             if len(t) > 1:
-                merged_transcripts += " " +  t[0].lower() + t[1:]
+                merged_transcripts += " " + t[0].lower() + t[1:]
             else:
                 merged_transcripts += " " + t
 
-        # find first appearance of a sentence-ending character
         while any(char in sec for char in merged_transcripts):
-            # split the merged transcript after the first sentence-ending character
             index = next((i for i, char in enumerate(merged_transcripts) if char in sec), None)
-            if index is None: break
-
-            # get head with sentence-ending character included
-            head = merged_transcripts[:index + 1].strip() # strip removes leading and trailing whitespaces
-            head = head[0].capitalize() + head[1:] if len(head) > 1 else head # capitalize the first character
-            p = result.get(chunk_id) # get the previous transcript
+            if index is None:
+                break
+            head = merged_transcripts[:index + 1].strip()
+            head = head[0].capitalize() + head[1:] if len(head) > 1 else head
+            p = result.get(chunk_id)
             if p:
-                result[chunk_id] = p + " " + head # append the head to the previous transcript
+                result[chunk_id] = {**transcript_event, 'transcript': p['transcript'] + " " + head}  
             else:
-                result[chunk_id] = head # set the head as the new transcript
-            
-            # get tail without sentence-ending character
+                result[chunk_id] = {**transcript_event, 'transcript': head}                           #preserve metadata
             merged_transcripts = merged_transcripts[index + 1:].strip()
 
-    # Add the last part of the merged transcript
-    chunk_ids = list(transcripts.keys())
-    if not chunk_ids: return result
-    last_chunk_id = chunk_ids[-1]  # Get the last key
+    chunk_ids = list(transcripts.keys())   
+    if not chunk_ids:
+        return result
+    last_chunk_id = chunk_ids[-1]
 
-    # Initialize the transcript for the last_key if not present
-    if last_chunk_id not in result: result[last_chunk_id] = {}
-
-    # Append the merged transcripts to the result
     if merged_transcripts:
-        # Ensure that result[last_key] is a dictionary
-        if not isinstance(result.get(last_chunk_id), dict): result[last_chunk_id] = {}
-        p = result[last_chunk_id].get('transcript', '')
-        result[last_chunk_id]['transcript'] = p + " " + merged_transcripts if p else merged_transcripts
+        p = result.get(last_chunk_id)
+        if p:
+            result[last_chunk_id] = {**transcripts[last_chunk_id], 'transcript': p['transcript'] + " " + merged_transcripts}
+        else:
+            result[last_chunk_id] = {**transcripts[last_chunk_id], 'transcript': merged_transcripts}
 
     return result
+
+# # merge all transcripts into one and split them into sentences
+# def merge_and_split_transcripts1(transcripts):
+#     # Iterate through the sorted transcript keys.
+#     sec = ".!?"
+#     merged_transcripts = ""
+#     result = {}
+#     for chunk_id in transcripts.keys():
+#         transcript_event = transcripts[chunk_id]
+#         if not merged_transcripts:
+#             # If merged_transcripts is empty, start with the first transcript.
+#             merged_transcripts += transcript_event['transcript'].strip()
+#         else:
+#             # Append the transcript to the merged string with a space and lowercase the following first character.
+#             t = transcript_event['transcript'].strip()
+#             if len(t) > 1:
+#                 merged_transcripts += " " +  t[0].lower() + t[1:]
+#             else:
+#                 merged_transcripts += " " + t
+
+#         # find first appearance of a sentence-ending character
+#         while any(char in sec for char in merged_transcripts):
+#             # split the merged transcript after the first sentence-ending character
+#             index = next((i for i, char in enumerate(merged_transcripts) if char in sec), None)
+#             if index is None: break
+
+#             # get head with sentence-ending character included
+#             head = merged_transcripts[:index + 1].strip() # strip removes leading and trailing whitespaces
+#             head = head[0].capitalize() + head[1:] if len(head) > 1 else head # capitalize the first character
+#             p = result.get(chunk_id) # get the previous transcript
+#             if p:
+#                 result[chunk_id] = p + " " + head # append the head to the previous transcript
+#             else:
+#                 result[chunk_id] = head # set the head as the new transcript
+            
+#             # get tail without sentence-ending character
+#             merged_transcripts = merged_transcripts[index + 1:].strip()
+
+#     # Add the last part of the merged transcript
+#     chunk_ids = list(transcripts.keys())
+#     if not chunk_ids: return result
+#     last_chunk_id = chunk_ids[-1]  # Get the last key
+
+#     # Initialize the transcript for the last_key if not present
+#     if last_chunk_id not in result: result[last_chunk_id] = {}
+
+#     # Append the merged transcripts to the result
+#     if merged_transcripts:
+#         # Ensure that result[last_key] is a dictionary
+#         if not isinstance(result.get(last_chunk_id), dict): result[last_chunk_id] = {}
+#         p = result[last_chunk_id].get('transcript', '')
+#         result[last_chunk_id]['transcript'] = p + " " + merged_transcripts if p else merged_transcripts
+
+#     return result
 
 def translate_with_llm(text, target_language):
     # first try to translate from the cache

@@ -223,48 +223,83 @@ def clean_old_transcripts():
             del transcriptd[tenant_id]
 
 # merge all transcripts into one and split them into sentences
+# def merge_and_split_transcripts(transcripts):
+#     # Iterate through the sorted transcript keys.
+#     sec = ".!?"
+#     merged_transcripts = ""
+#     result = {}
+#     for key in transcripts.keys():
+#         if not merged_transcripts:
+#             # If merged_transcripts is empty, start with the first transcript.
+#             merged_transcripts += transcripts[key].strip()
+#         else:
+#             # Append the transcript to the merged string with a space and lowercase the following first character.
+#             t = transcripts[key].strip()
+#             if len(t) > 1:
+#                 merged_transcripts += " " +  t[0].lower() + t[1:]
+#             else:
+#                 merged_transcripts += " " + t
+
+#         # find first appearance of a sentence-ending character
+#         while any(char in sec for char in merged_transcripts):
+#             # split the merged transcript after the first sentence-ending character
+#             index = next(i for i, char in enumerate(merged_transcripts) if char in sec)
+#             # get head with sentence-ending character included
+#             head = merged_transcripts[:index + 1].strip()
+#             head = head[0].capitalize() + head[1:] if len(head) > 1 else head
+#             p = result.get(key)
+#             if p:
+#                 result[key] = p + " " + head
+#             else:
+#                 result[key] = head
+            
+#             # get tail without sentence-ending character
+#             merged_transcripts = merged_transcripts[index + 1:].strip()
+
+#     # add the last part of the merged transcript
+#     if merged_transcripts:
+#         # dict.keys() returns a view in Python 3, not a list. so we wrap with list() to allow index access
+#         last_key = list(transcripts.keys())[-1]
+#         p = result.get(last_key)
+#         if p:
+#             result[last_key] = p + " " + merged_transcripts
+#         else:
+#             result[last_key] = merged_transcripts
+
+#     return result
+
 def merge_and_split_transcripts(transcripts):
-    # Iterate through the sorted transcript keys.
     sec = ".!?"
     merged_transcripts = ""
     result = {}
     for key in transcripts.keys():
         if not merged_transcripts:
-            # If merged_transcripts is empty, start with the first transcript.
-            merged_transcripts += transcripts[key].strip()
+            merged_transcripts += transcripts[key]['transcript'].strip()   
         else:
-            # Append the transcript to the merged string with a space and lowercase the following first character.
-            t = transcripts[key].strip()
+            t = transcripts[key]['transcript'].strip()                    
             if len(t) > 1:
-                merged_transcripts += " " +  t[0].lower() + t[1:]
+                merged_transcripts += " " + t[0].lower() + t[1:]
             else:
                 merged_transcripts += " " + t
 
-        # find first appearance of a sentence-ending character
         while any(char in sec for char in merged_transcripts):
-            # split the merged transcript after the first sentence-ending character
             index = next(i for i, char in enumerate(merged_transcripts) if char in sec)
-            # get head with sentence-ending character included
             head = merged_transcripts[:index + 1].strip()
             head = head[0].capitalize() + head[1:] if len(head) > 1 else head
             p = result.get(key)
             if p:
-                result[key] = p + " " + head
+                result[key] = {'transcript': p['transcript'] + " " + head}  
             else:
-                result[key] = head
-            
-            # get tail without sentence-ending character
+                result[key] = {'transcript': head}                        
             merged_transcripts = merged_transcripts[index + 1:].strip()
 
-    # add the last part of the merged transcript
     if merged_transcripts:
-        # dict.keys() returns a view in Python 3, not a list. so we wrap with list() to allow index access
-        last_key = list(transcripts.keys())[-1]
+        last_key = list(transcripts.keys())[-1]                  
         p = result.get(last_key)
         if p:
-            result[last_key] = p + " " + merged_transcripts
+            result[last_key] = {'transcript': p['transcript'] + " " + merged_transcripts}
         else:
-            result[last_key] = merged_transcripts
+            result[last_key] = {'transcript': merged_transcripts}
 
     return result
 
