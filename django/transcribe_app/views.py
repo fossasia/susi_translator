@@ -9,7 +9,7 @@ from rest_framework import status
 from rest_framework.parsers import JSONParser
 from drf_yasg.utils import swagger_auto_schema
 from drf_yasg import openapi
-from .transcribe_utils import get_transcripts, add_to_audio_stack, process_audio, merge_and_split_transcripts, translate, logger
+from .transcribe_utils import get_transcripts, add_to_audio_stack, process_audio, merge_and_split_transcripts, translate, logger, transcriptsd_lock
 from .serializers import (
     TranscribeInputSerializer,
     TranscribeResponseSerializer,
@@ -83,18 +83,20 @@ class GetTranscriptView(APIView):
         If the chunk_id is not found, an empty transcript is returned.
         """
         tenant_id = request.GET.get('tenant_id', '0000')
-        t = get_transcripts(tenant_id)
-        if len(t) == 0:
-            return Response({'chunk_id': '-1', 'transcript': ''})
-        else:
-            sentences = request.GET.get('sentences', 'false') == 'true'
-            if sentences: t = merge_and_split_transcripts(t)
-            chunk_id = request.GET.get('chunk_id')
-            if chunk_id in t:
-                transcript = t.get(chunk_id, {}).get('transcript', '')
-                return Response({'chunk_id': chunk_id, 'transcript': transcript})
+        # Lock required to prevent concurrent pop/dict iteration race conditions
+        with transcriptsd_lock:
+            t = get_transcripts(tenant_id)
+            if len(t) == 0:
+                return Response({'chunk_id': '-1', 'transcript': ''})
             else:
-                return Response({'chunk_id': chunk_id, 'transcript': ''})
+                sentences = request.GET.get('sentences', 'false') == 'true'
+                if sentences: t = merge_and_split_transcripts(t)
+                chunk_id = request.GET.get('chunk_id')
+                if chunk_id in t:
+                    transcript = t.get(chunk_id, {}).get('transcript', '')
+                    return Response({'chunk_id': chunk_id, 'transcript': transcript})
+                else:
+                    return Response({'chunk_id': chunk_id, 'transcript': ''})
 
 @method_decorator(csrf_exempt, name='dispatch')
 class GetFirstTranscriptView(APIView):
@@ -111,17 +113,18 @@ class GetFirstTranscriptView(APIView):
         Retrieve the first transcript for a given tenant_id.
         """
         tenant_id = request.GET.get('tenant_id', '0000')
-        t = get_transcripts(tenant_id)
-        if len(t) == 0:
-            return Response({'chunk_id': '-1', 'transcript': ''})
-        else:
-            sentences = request.GET.get('sentences', 'false') == 'true'
-            if sentences: t = merge_and_split_transcripts(t)
-            fromid = request.GET.get('from', '0')
-            sorted_keys = sorted(t.keys())
-            first_chunk_id = next((k for k in sorted_keys if int(k) >= int(fromid)), None)
-            first_transcript = t[first_chunk_id]['transcript']
-            return Response({'chunk_id': first_chunk_id, 'transcript': first_transcript})
+        with transcriptsd_lock:
+            t = get_transcripts(tenant_id)
+            if len(t) == 0:
+                return Response({'chunk_id': '-1', 'transcript': ''})
+            else:
+                sentences = request.GET.get('sentences', 'false') == 'true'
+                if sentences: t = merge_and_split_transcripts(t)
+                fromid = request.GET.get('from', '0')
+                sorted_keys = sorted(t.keys())
+                first_chunk_id = next((k for k in sorted_keys if int(k) >= int(fromid)), None)
+                first_transcript = t.get(first_chunk_id, {}).get('transcript', '') if first_chunk_id else ''
+                return Response({'chunk_id': first_chunk_id or '-1', 'transcript': first_transcript})
 
 @method_decorator(csrf_exempt, name='dispatch')
 class PopFirstTranscriptView(APIView):
@@ -138,17 +141,18 @@ class PopFirstTranscriptView(APIView):
         Retrieve and remove the first transcript for a given tenant_id.
         """
         tenant_id = request.GET.get('tenant_id', '0000')
-        t = get_transcripts(tenant_id)
-        if len(t) == 0:
-            return Response({'chunk_id': '-1', 'transcript': ''})
-        else:
-            sentences = request.GET.get('sentences', 'false') == 'true'
-            if sentences: t = merge_and_split_transcripts(t)
-            fromid = request.GET.get('from', '0')
-            sorted_keys = sorted(t.keys())
-            first_chunk_id = next((k for k in sorted_keys if int(k) >= int(fromid)), None)
-            first_transcript = t.pop(first_chunk_id, {}).get('transcript', '')
-            return Response({'chunk_id': first_chunk_id, 'transcript': first_transcript})
+        with transcriptsd_lock:
+            t = get_transcripts(tenant_id)
+            if len(t) == 0:
+                return Response({'chunk_id': '-1', 'transcript': ''})
+            else:
+                sentences = request.GET.get('sentences', 'false') == 'true'
+                if sentences: t = merge_and_split_transcripts(t)
+                fromid = request.GET.get('from', '0')
+                sorted_keys = sorted(t.keys())
+                first_chunk_id = next((k for k in sorted_keys if int(k) >= int(fromid)), None)
+                first_transcript = t.pop(first_chunk_id, {}).get('transcript', '') if first_chunk_id else ''
+                return Response({'chunk_id': first_chunk_id or '-1', 'transcript': first_transcript})
 
 @method_decorator(csrf_exempt, name='dispatch')
 class GetLatestTranscriptView(APIView):
@@ -165,29 +169,30 @@ class GetLatestTranscriptView(APIView):
         Retrieve the latest transcript for a given tenant_id. Optionally translate it into another language.
         """
         tenant_id = request.GET.get('tenant_id', '0000')
-        transcripts = get_transcripts(tenant_id)
-        
-        if len(transcripts) == 0:
-            return Response({})
-        else:
-            untilid = request.GET.get('until', str(int(time.time() * 1000)))
-            sorted_keys = sorted(transcripts.keys(), reverse=True)
-            # remove all keys that are greater than untilid
-            new_sorted_keys = []
-            for k in sorted_keys:
-                try:
-                    if int(k) <= int(untilid):
-                        new_sorted_keys.append(k)
-                except ValueError:
-                    pass # Ignore non-numeric chunk IDs
-            sorted_keys = new_sorted_keys
-            # now extract the first three keys from largest to smallest
-            extracted_keys = sorted_keys[:4] if len(sorted_keys) > 3 else sorted_keys
-            # from the transcripts dictionary, extract the transcripts for the extracted keys
-            extracted_transcripts = {k: transcripts[k] for k in extracted_keys}
-            # now sort the extracted transcripts by key again, now lowest to highest
-            extracted_transcripts = {k: v for k, v in sorted(extracted_transcripts.items())}    
-            return Response(extracted_transcripts)
+        with transcriptsd_lock:
+            transcripts = get_transcripts(tenant_id)
+            
+            if len(transcripts) == 0:
+                return Response({})
+            else:
+                untilid = request.GET.get('until', str(int(time.time() * 1000)))
+                sorted_keys = sorted(transcripts.keys(), reverse=True)
+                # remove all keys that are greater than untilid
+                new_sorted_keys = []
+                for k in sorted_keys:
+                    try:
+                        if int(k) <= int(untilid):
+                            new_sorted_keys.append(k)
+                    except ValueError:
+                        pass # Ignore non-numeric chunk IDs
+                sorted_keys = new_sorted_keys
+                # now extract the first three keys from largest to smallest
+                extracted_keys = sorted_keys[:4] if len(sorted_keys) > 3 else sorted_keys
+                # from the transcripts dictionary, extract the transcripts for the extracted keys
+                extracted_transcripts = {k: transcripts[k] for k in extracted_keys}
+                # now sort the extracted transcripts by key again, now lowest to highest
+                extracted_transcripts = {k: v for k, v in sorted(extracted_transcripts.items())}    
+                return Response(extracted_transcripts)
             
 @method_decorator(csrf_exempt, name='dispatch')
 class PopLatestTranscriptView(APIView):
@@ -206,15 +211,16 @@ class PopLatestTranscriptView(APIView):
         tenant_id = request.GET.get('tenant_id', '0000')
         untilid = request.GET.get('until', str(int(time.time() * 1000)))
         sentences = request.GET.get('sentences', 'false') == 'true'
-        t = get_transcripts(tenant_id)
-        if sentences: t = merge_and_split_transcripts(t)
-        sorted_keys = sorted(t.keys(), reverse=True)
-        latest_chunk_id = next((k for k in sorted_keys if int(k) < int(untilid)), None)
-        if latest_chunk_id in t:
-            latest_transcript = t.pop(latest_chunk_id, {}).get('transcript', '')
-            return Response({'chunk_id': latest_chunk_id, 'transcript': latest_transcript})
-        else:
-            return Response({'chunk_id': '-1', 'transcript': ''})
+        with transcriptsd_lock:
+            t = get_transcripts(tenant_id)
+            if sentences: t = merge_and_split_transcripts(t)
+            sorted_keys = sorted(t.keys(), reverse=True)
+            latest_chunk_id = next((k for k in sorted_keys if int(k) < int(untilid)), None)
+            if latest_chunk_id in t:
+                latest_transcript = t.pop(latest_chunk_id, {}).get('transcript', '')
+                return Response({'chunk_id': latest_chunk_id, 'transcript': latest_transcript})
+            else:
+                return Response({'chunk_id': '-1', 'transcript': ''})
 
 @method_decorator(csrf_exempt, name='dispatch')
 class DeleteTranscriptView(APIView):
@@ -233,13 +239,15 @@ class DeleteTranscriptView(APIView):
         tenant_id = request.GET.get('tenant_id', '0000')
         chunk_id = request.GET.get('chunk_id')
         sentences = request.GET.get('sentences', 'false') == 'true'
-        t = get_transcripts(tenant_id)
-        if sentences: t = merge_and_split_transcripts(t)
-        if chunk_id in t:
-            entry = t.pop(chunk_id)
-            return Response({'chunk_id': chunk_id, 'transcript': entry['transcript']})
-        else:
-            return Response({'chunk_id': chunk_id, 'transcript': ''})
+        # Lock API pops to synchronize safely against process\_audio background cleanup
+        with transcriptsd_lock:
+            t = get_transcripts(tenant_id)
+            if sentences: t = merge_and_split_transcripts(t)
+            if chunk_id in t:
+                entry = t.pop(chunk_id, {'transcript': ''})
+                return Response({'chunk_id': chunk_id, 'transcript': entry.get('transcript', '')})
+            else:
+                return Response({'chunk_id': chunk_id, 'transcript': ''})
 
 @method_decorator(csrf_exempt, name='dispatch')
 class ListTranscriptsView(APIView):
@@ -260,10 +268,11 @@ class ListTranscriptsView(APIView):
         fromid = request.GET.get('from', '0')
         untilid = request.GET.get('until', str(int(time.time() * 1000)))
         sentences = request.GET.get('sentences', 'false') == 'true'
-        t = get_transcripts(tenant_id)
-        if sentences: t = merge_and_split_transcripts(t)
-        transcripts = {k: v for k, v in t.items() if int(fromid) <= int(k) <= int(untilid)}
-        return Response({'transcripts': [{'chunk_id': k, 'transcript': v['transcript']} for k, v in transcripts.items()]})
+        with transcriptsd_lock:
+            t = get_transcripts(tenant_id)
+            if sentences: t = merge_and_split_transcripts(t)
+            transcripts = {k: v for k, v in t.items() if int(fromid) <= int(k) <= int(untilid)}
+            return Response({'transcripts': [{'chunk_id': k, 'transcript': v.get('transcript', '')} for k, v in transcripts.items()]})
 
 @method_decorator(csrf_exempt, name='dispatch')
 class TranscriptsSizeView(APIView):
@@ -281,13 +290,14 @@ class TranscriptsSizeView(APIView):
         Get the size of the transcripts for a given tenant_id.
         """
         tenant_id = request.GET.get('tenant_id', '0000')
-        t = get_transcripts(tenant_id)
         sentences = request.GET.get('sentences', 'false') == 'true'
-        if sentences: t = merge_and_split_transcripts(t)
         fromid = request.GET.get('from', '0')
         untilid = request.GET.get('until', str(int(time.time() * 1000)))
-        transcripts = {k: v for k, v in t.items() if k.isdigit() and int(fromid) <= int(k) <= int(untilid)}
-        return Response({'size': len(transcripts)})
+        with transcriptsd_lock:
+            t = get_transcripts(tenant_id)
+            if sentences: t = merge_and_split_transcripts(t)
+            transcripts = {k: v for k, v in t.items() if k.isdigit() and int(fromid) <= int(k) <= int(untilid)}
+            return Response({'size': len(transcripts)})
     
 @method_decorator(csrf_exempt, name='dispatch')
 class ServeRootStaticFileView(APIView):

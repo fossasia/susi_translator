@@ -33,6 +33,10 @@ translation_ongoing = False
 transcriptsd = {} # dictionary of objects; the key is the tenant_id and the value is a dictionary with the chunk_id as key and the transcript as value
 audio_stacks = {} # a dictionary of queues; the key is the tenant_id and the value is the queue, a queue.Queue() object
 
+# Global locks to prevent data races across threads and API views
+transcriptsd_lock = threading.Lock()
+audio_stacks_lock = threading.Lock()
+
 if use_whisper_server:
     # Use the whisper.cpp server
     # this requires to start the server with the following command:
@@ -69,7 +73,7 @@ def add_to_audio_stack(tenant_id, chunk_id, audio_b64, translate_from, translate
     """
     Add an audio chunk to the queue for the given tenant.
     """
-    with threading.Lock():
+    with audio_stacks_lock:
         if tenant_id not in audio_stacks:
             audio_stacks[tenant_id] = queue.Queue()
         audio_stacks[tenant_id].put((chunk_id, audio_b64, translate_from, translate_to))
@@ -78,7 +82,7 @@ def get_transcripts(tenant_id):
     """
     Retrieve transcripts for the given tenant.
     """
-    with threading.Lock():
+    with transcriptsd_lock:
         return transcriptsd.get(tenant_id, {})
 
 # Process audio data
@@ -87,26 +91,43 @@ def process_audio():
     Continuously process audio chunks for transcription.
     """
     while True:
-        with threading.Lock():
-            # we iterate over alle tenant_ids in the audio_stacks
+        with audio_stacks_lock:
             keys_list = list(audio_stacks.keys())
-            for tenant_id in keys_list:
-                audio_stack = audio_stacks[tenant_id]
-                
+            
+        if not keys_list:
+            time.sleep(0.1)
+            continue
+            
+        for tenant_id in keys_list:
+            with audio_stacks_lock:
+                audio_stack = audio_stacks.get(tenant_id)
                 # empty queues are removed
-                if not audio_stack or audio_stack.empty():
+                if audio_stack is not None and audio_stack.empty():
                     del audio_stacks[tenant_id]
                     continue
-                
-                # Get the next audio chunk from the queue
+            
+            if audio_stack is None:
+                continue
+            
+            # Get the next audio chunk from the queue
+            if not audio_stack.empty():
                 chunk_id, audiob64, translate_from, translate_to = audio_stack.get()
                 logger.debug(f"Queue length: {audio_stack.qsize()}")
-                # Skip forward in the stack until we find the last entry with the same chunk_id and the same tenant_id
+                # Safely drop older duplicate chunks without breaking queue state
                 try:
-                    # scan through the whole audio_stack to find any other entries with the same chunk_id and tenant_id
-                    # in case we find one, we skip the head and take the next one from the head of the queue and scan again
                     while audio_stack.qsize() > 0:
-                        chunk_id, audiob64, translate_from, translate_to = audio_stack.get()
+                        found_same_chunk = False
+                        with audio_stack.mutex:
+                            for item in list(audio_stack.queue):
+                                if item[0] == chunk_id:
+                                    found_same_chunk = True
+                                    break
+                        if found_same_chunk:
+                            # clear the stale head
+                            audio_stack.task_done()
+                            chunk_id, audiob64, translate_from, translate_to = audio_stack.get()
+                        else:
+                            break
 
                     # Convert audio bytes to a writable NumPy array
                     audio_data = base64.b64decode(audiob64)
@@ -172,7 +193,7 @@ def process_audio():
                     
                     if is_valid(transcript):
                         logger.info(f"VALID transcript for chunk_id {chunk_id}: {transcript}")
-                        with threading.Lock():  # Ensure thread-safe access to shared resources
+                        with transcriptsd_lock:  # Ensure thread-safe access to shared resources
                             # we must distinguish between the case where the chunk_id is already in the transcripts
                             # this can happen quite often because the client will generate a new chunk_id only when
                             # the recorded audio has silence. So all chunks are those pieces with speech without a pause.
@@ -278,7 +299,7 @@ def clean_old_transcripts():
     """
     current_time = int(time.time() * 1000)  # Current time in milliseconds
     two_hours_ago = current_time - (2 * 60 * 60 * 1000)  # Two hours ago in milliseconds
-    with threading.Lock():
+    with transcriptsd_lock:
         # make a list of tenant_ids to delete
         to_delete = []
         # iterate over all dictionaries in transcriptd
