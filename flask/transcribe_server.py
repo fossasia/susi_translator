@@ -278,7 +278,12 @@ def clean_old_transcripts():
         tenants_to_remove = []
         for tenant_id in list(transcriptd.keys()):
             transcripts = transcriptd[tenant_id]
-            old_chunks = [chunk_id for chunk_id in transcripts if int(chunk_id) < two_hours_ago]
+            old_chunks = [
+                chunk_id
+                for chunk_id in transcripts
+                if (isinstance(chunk_id, int) or (isinstance(chunk_id, str) and chunk_id.isdigit()))
+                and int(chunk_id) < two_hours_ago
+            ]
             for chunk_id in old_chunks:
                 del transcripts[chunk_id]
             if len(transcripts) == 0:
@@ -421,8 +426,8 @@ class GetTranscript(Resource):
             t = transcriptd.get(tenant_id, {})
             if len(t) == 0:
                 return jsonify({'chunk_id': '-1', 'transcript': ''})
-            sentences = request.args.get('sentences', default='false') == 'true'
-            if sentences == 'true':
+            sentences = request.args.get('sentences', default='false').lower() == 'true'
+            if sentences:
                 t = merge_and_split_transcripts(t)
             chunk_id = request.args.get('chunk_id')
             if chunk_id in t:
@@ -447,8 +452,8 @@ class GetFirstTranscript(Resource):
             t = transcriptd.get(tenant_id, {})
             if len(t) == 0:
                 return jsonify({'chunk_id': '-1', 'transcript': ''})
-            sentences = request.args.get('sentences', default='false') == 'true'
-            if sentences == 'true':
+            sentences = request.args.get('sentences', default='false').lower() == 'true'
+            if sentences:
                 t = merge_and_split_transcripts(t)
             fromid = request.args.get('from', default='0')
             first_chunk_id = next((k for k in sorted(t.keys()) if int(k) >= int(fromid)), None)
@@ -473,8 +478,8 @@ class PopFirstTranscript(Resource):
             t = transcriptd.get(tenant_id, {})
             if len(t) == 0:
                 return jsonify({'chunk_id': '-1', 'transcript': ''})
-            sentences = request.args.get('sentences', default='false') == 'true'
-            if sentences == 'true':
+            sentences = request.args.get('sentences', default='false').lower() == 'true'
+            if sentences:
                 t = merge_and_split_transcripts(t)
             fromid = request.args.get('from', default='0')
             first_chunk_id = next((k for k in sorted(t.keys()) if int(k) >= int(fromid)), None)
@@ -499,8 +504,8 @@ class GetLatestTranscript(Resource):
             t = transcriptd.get(tenant_id, {})
             if len(t) == 0:
                 return jsonify({'chunk_id': '-1', 'transcript': ''})
-            sentences = request.args.get('sentences', default='false') == 'true'
-            if sentences == 'true':
+            sentences = request.args.get('sentences', default='false').lower() == 'true'
+            if sentences:
                 t = merge_and_split_transcripts(t)
             untilid = request.args.get('until', default=str(int(time.time() * 1000)))
             latest_chunk_id = next((k for k in sorted(t.keys(), reverse=True) if int(k) < int(untilid)), None)
@@ -525,8 +530,8 @@ class PopLatestTranscript(Resource):
             t = transcriptd.get(tenant_id, {})
             if len(t) == 0:
                 return jsonify({'chunk_id': '-1', 'transcript': ''})
-            sentences = request.args.get('sentences', default='false') == 'true'
-            if sentences == 'true':
+            sentences = request.args.get('sentences', default='false').lower() == 'true'
+            if sentences:
                 t = merge_and_split_transcripts(t)
             untilid = request.args.get('until', default=str(int(time.time() * 1000)))
             latest_chunk_id = next((k for k in sorted(t.keys(), reverse=True) if int(k) < int(untilid)), None)
@@ -548,8 +553,8 @@ class DeleteTranscript(Resource):
         tenant_id = request.args.get('tenant_id', '0000')
         with _transcript_lock:
             t = transcriptd.get(tenant_id, {})
-            sentences = request.args.get('sentences', default='false') == 'true'
-            if sentences == 'true':
+            sentences = request.args.get('sentences', default='false').lower() == 'true'
+            if sentences:
                 t = merge_and_split_transcripts(t)
             chunk_id = request.args.get('chunk_id')
             if chunk_id in t:
@@ -574,13 +579,13 @@ class ListTranscripts(Resource):
         tenant_id = request.args.get('tenant_id', '0000')
         with _transcript_lock:
             t = transcriptd.get(tenant_id, {})
-            sentences = request.args.get('sentences', default='false') == 'true'
-            if sentences == 'true':
+            sentences = request.args.get('sentences', default='false').lower() == 'true'
+            if sentences:
                 t = merge_and_split_transcripts(t)
             fromid = request.args.get('from', default='0')
             untilid = request.args.get('until', default=str(int(time.time() * 1000)))
-            list = {k: v for k, v in t.items() if int(fromid) <= int(k) <= int(untilid)}
-            return jsonify(list)
+            transcripts_filtered = {k: v for k, v in t.items() if int(fromid) <= int(k) <= int(untilid)}
+            return jsonify(transcripts_filtered)
   
 @api.route('/transcripts_size')
 class TranscriptsSize(Resource):
@@ -599,8 +604,8 @@ class TranscriptsSize(Resource):
         tenant_id = request.args.get('tenant_id', '0000')
         with _transcript_lock:
             t = transcriptd.get(tenant_id, {})
-            sentences = request.args.get('sentences', default='false') == 'true'
-            if sentences == 'true':
+            sentences = request.args.get('sentences', default='false').lower() == 'true'
+            if sentences:
                 t = merge_and_split_transcripts(t)
             fromid = request.args.get('from', default='0')
             untilid = request.args.get('until', default=str(int(time.time() * 1000)))
@@ -633,4 +638,4 @@ def stt_stream(ws):
 
 if __name__ == '__main__':
     ensure_process_audio_thread()
-    app.run(host='0.0.0.0', port=5055, debug=False)
+    app.run(host='0.0.0.0', port=5040, debug=False)
