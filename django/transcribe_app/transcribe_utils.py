@@ -16,6 +16,9 @@ import json
 import time
 from scipy.io.wavfile import write as wav_write
 
+from concurrent.futures import ThreadPoolExecutor
+translation_executor = ThreadPoolExecutor(max_workers=4)
+
 logger = logging.getLogger(__name__)
 
 # we either use a local in-code model or access a whisper.cpp server
@@ -219,11 +222,7 @@ def process_audio():
                             transcript_event['translate_to'] = translate_to
                             # Trigger translation asynchronously after transcription
                             if translate_to and not transcript_event.get("translated", False):
-                                threading.Thread(
-                                    target=process_translation,
-                                    args=(transcript_event,),
-                                    daemon=True
-                                ).start()
+                                translation_executor.submit(process_translation, transcript_event)
                     else:
                         logger.warning(f"INVALID transcript for chunk_id {chunk_id}: {transcript}")
                     
