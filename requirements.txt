@@ -1,12 +1,28 @@
+# Django backend
 django
 django-cors-headers
 djangorestframework
 drf_yasg
-flask-sock
+
+# Documentation
 mkdocs
 mkdocs-bootswatch
+
+# Audio & AI
 openai-whisper
 pyaudio
+numpy
+scipy
+torch
+
+# Flask server
+flask
+flask-restx
+flask-cors
+flask-sock
+simple-websocket
+
+# Utilities
 pybars3
 requests
-simple-websocket
+python-dotenv
