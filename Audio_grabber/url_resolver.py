@@ -78,9 +78,8 @@ class URLResolver:
     #stream_types that are untappable server-side
     _UNSUPPORTED_TYPES = {StreamType.ZOOM, StreamType.IFRAME}
 
-    def __init__(self,ytdlp_binary: str = "yt-dlp"):
+    def __init__(self):
 
-        self._ytdlp_binary = ytdlp_binary
         self._manifest_cache: dict[str, str] = {}  
 
 
@@ -218,10 +217,12 @@ class URLResolver:
         except subprocess.TimeoutExpired:
             raise ResolutionError(f"yt-dlp timed out after 15 seconds for URL: {page_url}")
         except FileNotFoundError:
-            raise ResolutionError(f"yt-dlp binary not found at '{self._ytdlp_binary}'.")
+            raise ResolutionError("Python executable not found to run yt-dlp.")
 
         if result.returncode != 0:
-            raise ResolutionError(f"yt-dlp exited with code {result.returncode} for URL: {page_url}. stderr: {result.stderr.strip()}")
+            error_output = result.stderr.strip()
+            truncated_stderr = error_output[:200] + "..." if len(error_output) > 200 else error_output
+            raise ResolutionError(f"yt-dlp exited with code {result.returncode} for URL: {page_url}. stderr: {truncated_stderr}")
 
         try:
             info = json.loads(result.stdout)
