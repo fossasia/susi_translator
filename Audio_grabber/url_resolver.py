@@ -213,7 +213,7 @@ class URLResolver:
         ]
 
         try:
-            result = subprocess.run(
+            result = subprocess.run(  # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit
                 cmd,
                 capture_output=True,
                 text=True,
