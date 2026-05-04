@@ -194,6 +194,9 @@ class URLResolver:
          yt-dlp is run as a subprocess to extract the best audio HLS manifest URL
         """
 
+        if not page_url.startswith(("http://", "https://")):
+            raise ResolutionError(f"Invalid URL protocol: {page_url}")
+
         cmd = [
             sys.executable, "-m", "yt_dlp",
             "-f", "bestaudio/best",
@@ -204,6 +207,8 @@ class URLResolver:
         ]
 
         try:
+            # sourcery skip: dangerous-subprocess-use-audit
+            # subprocess.run with a list of arguments is safe from shell injection.
             result = subprocess.run(
                 cmd,
                 capture_output=True,
