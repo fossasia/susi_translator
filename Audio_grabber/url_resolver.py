@@ -11,6 +11,7 @@ import logging
 import subprocess
 import json
 import sys
+import urllib.parse
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional
@@ -193,8 +194,14 @@ class URLResolver:
          yt-dlp is run as a subprocess to extract the best audio HLS manifest URL
         """
 
-        if not page_url.startswith(("http://", "https://")):
-            raise ResolutionError(f"Invalid URL protocol: {page_url}")
+        # Strictly parse and reconstruct the URL to prevent any possibility of
+        # argument injection. Only http/https URLs with a valid netloc are accepted.
+        parsed = urllib.parse.urlparse(page_url)
+        if parsed.scheme not in ("http", "https") or not parsed.netloc:
+            raise ResolutionError(
+                f"Invalid or unsafe URL: '{page_url}'. Only http/https URLs are accepted."
+            )
+        safe_url = urllib.parse.urlunparse(parsed)
 
         cmd = [
             sys.executable, "-m", "yt_dlp",
@@ -202,7 +209,7 @@ class URLResolver:
             "--no-playlist",
             "--no-warnings",
             "-J",
-            page_url,
+            safe_url,
         ]
 
         try:
