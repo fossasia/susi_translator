@@ -206,8 +206,6 @@ class URLResolver:
         ]
 
         try:
-            # sourcery skip: dangerous-subprocess-use-audit
-            # subprocess.run with a list of arguments is safe from shell injection.
             result = subprocess.run(
                 cmd,
                 capture_output=True,
