@@ -10,6 +10,7 @@ Real-time audio transcription + optional translation prototype with:
 
 - Python 3.10+
 - [uv](https://docs.astral.sh/uv/)
+- pip (optional; only needed for the legacy fallback path)
 
 ## Setup (Primary: uv)
 

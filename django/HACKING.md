@@ -24,34 +24,24 @@ Before you begin, ensure you have the following installed on your system:
 - Python 3.10 or higher
 - Git
 - uv
+- pip (optional; only for the legacy fallback path)
 
 ## Project Structure
 
-```
-transcribe_project/
-├── manage.py
-├── transcribe_project/
-│ ├── init.py
-│ ├── settings.py
-│ ├── urls.py
-│ └── wsgi.py
-├── transcribe_app/
-│ ├── init.py
-│ ├── admin.py
-│ ├── apps.py
-│ ├── migrations/
-│ ├── models.py
-│ ├── serializers.py
-│ ├── tests.py
-│ ├── transcribe_utils.py
-│ ├── urls.py
-│ └── views.py
-├── templates/
-│ └── registration/
-│ └── login.html
+```text
+susi_translator/
 ├── pyproject.toml
-└── requirements.txt (legacy fallback)
+├── requirements.txt (legacy fallback)
+├── django/
+│ ├── manage.py
+│ ├── transcribe_project/
+│ ├── transcribe_app/
+│ └── templates/
+└── flask/
 ```
+
+`uv sync` should be run from the **repo root** (`susi_translator/`).  
+Django management commands should be run from `django/` (or from root with `uv run --project django ...`).
 
 ## Setting Up the Development Environment
 
