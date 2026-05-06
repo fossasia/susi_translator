@@ -1,32 +1,25 @@
-# Django backend
+# Legacy fallback only.
+# Primary setup is now:
+#   uv sync
+#
+# Dependencies are managed in pyproject.toml.
+# Keep this file for environments that still need pip:
+#   pip install -r requirements.txt
+
 django
 django-cors-headers
 djangorestframework
-drf_yasg
-
-# Documentation
+drf-yasg
+flask
+flask-cors
+flask-restx
 mkdocs
 mkdocs-bootswatch
-
-# Audio & AI
+numpy
 openai-whisper
 pyaudio
-numpy
-scipy
-torch
-
-# Flask server
-flask
-flask-restx
-flask-cors
-
-# Utilities
 pybars3
-requests
 python-dotenv
-flask
-flask-restx
-flask-cors
-numpy
-torch
+requests
 scipy
+torch

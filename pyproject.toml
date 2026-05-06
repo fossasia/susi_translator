@@ -1,0 +1,28 @@
+[project]
+name = "susi-translator"
+version = "0.1.0"
+description = "Real-time transcription and translation prototype with Django and Flask backends."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "django",
+    "django-cors-headers",
+    "djangorestframework",
+    "drf-yasg",
+    "flask",
+    "flask-cors",
+    "flask-restx",
+    "mkdocs",
+    "mkdocs-bootswatch",
+    "numpy",
+    "openai-whisper",
+    "pyaudio",
+    "pybars3",
+    "python-dotenv",
+    "requests",
+    "scipy",
+    "torch",
+]
+
+[tool.uv]
+package = false
