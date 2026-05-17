@@ -1,45 +1,54 @@
-# Real-time Audio Transcription
+# SUSI Translator
 
-## Purpose
-This project aims to provide a real-time audio transcription system, where audio input from a microphone is sent to a server, transcribed, and then displayed to the user in real-time. The project uses a server to do the heavy calculations to do the actual transcription while a lightweight
-client just does the audio recording and another client just does the result display.
+Real-time audio transcription + optional translation prototype with:
 
-## Python Files
+- a **Django API backend** (`django/`) - primary path
+- a **Flask API backend** (`flask/`) - legacy/compat path
+- browser/Python clients that capture audio chunks and push them to the API
 
-### transcribe_server.py
+## Prerequisites
 
-This file contains the server-side logic, which:
+- Python 3.10+
+- [uv](https://docs.astral.sh/uv/)
+- pip (optional; only needed for the legacy fallback path)
 
-- Listens for incoming audio chunks from the client
-- Transcribes the audio chunks using whisper
-- Returns the transcribed text to the client
+## Setup (Primary: uv)
 
-### audio_grabber.py
-
-This file contains the client-side logic, which:
-
-- Captures audio from the microphone
-- Chunks the audio into manageable pieces
-- Sends the audio chunks to the server with a unique chunk ID
-
-## HTML Files
-
-### transcribe_listener.html
-
-This file contains the client-side logic, which:
-
-- Listens to the server for transcribed chunks
-- Displays the transcribed text to the user in real-time
-
-## Setup and Run
-
-To set up and run the project, follow these steps:
-
-* Install the required Python packages: pyaudio, flask, requests, whisper
-* Run `audio_grabber.py` to start capturing audio from the microphone
-* Run `transcribe_server.py` to start the server
-* Open `transcribe_listener.html` in the browser to start displaying transcribed text in real-time
-
+```bash
+uv sync
 ```
-./server -m models/ggml-large-v3.bin -l de -p 16 -t 32 --host 0.0.0.0 --port 8007
+
+This creates `.venv/` and installs dependencies from `pyproject.toml`.
+
+## Run Django backend (recommended)
+
+```bash
+cd django
+uv run python manage.py migrate
+uv run python manage.py runserver 0.0.0.0:5040
 ```
+
+Swagger:
+
+- <http://localhost:5040/swagger/>
+
+## Run Flask backend (legacy)
+
+```bash
+cd flask
+uv run python transcribe_server.py
+```
+
+## Environment variables
+
+Copy `.env.example` to `.env` and adjust values:
+
+- `WHISPER_SERVER_USE` (`true` to use whisper server, `false` for local models)
+- `WHISPER_SERVER`
+- `WHISPER_MODEL`
+- `WHISPER_DEVICE`
+- `TRANSCRIBE_SERVER_URL`
+
+## Legacy pip fallback
+
+`requirements.txt` is kept for compatibility, but `uv sync` is the supported install flow.

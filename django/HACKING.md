@@ -21,37 +21,27 @@ Welcome to the development guide for the Transcription API project. This documen
 
 Before you begin, ensure you have the following installed on your system:
 
-- Python 3.8 or higher
+- Python 3.10 or higher
 - Git
-- pip (Python package installer)
-- Virtualenv (optional but recommended)
+- uv
+- pip (optional; only for the legacy fallback path)
 
 ## Project Structure
 
+```text
+susi_translator/
+├── pyproject.toml
+├── requirements.txt (legacy fallback)
+├── django/
+│ ├── manage.py
+│ ├── transcribe_project/
+│ ├── transcribe_app/
+│ └── templates/
+└── flask/
 ```
-transcribe_project/
-├── manage.py
-├── transcribe_project/
-│ ├── init.py
-│ ├── settings.py
-│ ├── urls.py
-│ └── wsgi.py
-├── transcribe_app/
-│ ├── init.py
-│ ├── admin.py
-│ ├── apps.py
-│ ├── migrations/
-│ ├── models.py
-│ ├── serializers.py
-│ ├── tests.py
-│ ├── transcribe_utils.py
-│ ├── urls.py
-│ └── views.py
-├── templates/
-│ └── registration/
-│ └── login.html
-└── requirements.txt
-```
+
+`uv sync` should be run from the **repo root** (`susi_translator/`).  
+Django management commands should be run from `django/` (or from root with `uv run --project django ...`).
 
 ## Setting Up the Development Environment
 
@@ -64,24 +54,20 @@ git clone https://github.com/yourusername/transcribe_project.git
 cd transcribe_project
 ```
 
-### 2. Create a Virtual Environment
-It's recommended to use a virtual environment to manage your Python dependencies.
+### 2. Install Dependencies (Primary with uv)
+Install all dependencies and create the project virtual environment with uv.
 
 ```
-python3 -m venv venv
-source venv/bin/activate  # On Windows use `venv\Scripts\activate`
+uv sync
 ```
 
-### 3. Install Dependencies
-Install the required Python packages using pip:
+This creates `.venv/` automatically and installs packages from `pyproject.toml`.
+
+### 3. Legacy pip Fallback (Optional)
+If you cannot use uv, install dependencies with pip:
 
 ```
 pip install -r requirements.txt
-```
-
-If requirements.txt does not exist, install the dependencies manually:
-```
-pip3 install django djangorestframework drf-yasg django-cors-headers numpy torch openai-whisper
 ```
 
 ### 4. Configure Environment Variables
@@ -198,15 +184,15 @@ STATICFILES_DIRS = [BASE_DIR / 'static']
 Run Django migrations to set up your database schema:
 
 ```
-python3 manage.py makemigrations
-python3 manage.py migrate
+uv run python manage.py makemigrations
+uv run python manage.py migrate
 ```
 
 ### 7. Create a Superuser
 Create an admin account to access the Django admin interface:
 
 ```
-python3 manage.py createsuperuser
+uv run python manage.py createsuperuser
 ```
 
 Provide a username, email, and password when prompted.
@@ -214,14 +200,14 @@ Provide a username, email, and password when prompted.
 ### 8. Run the Development Server
 Start the Django development server:
 ```
-python3 manage.py runserver 0.0.0.0:5040
+uv run python manage.py runserver 0.0.0.0:5040
 ```
 
 ### 9. Development Workflow
 
 #### Running the Application
-- Ensure your virtual environment is activated.
-- Run the development server using python3 manage.py runserver.
+- Install dependencies with `uv sync`.
+- Run the development server using `uv run python manage.py runserver`.
 
 #### Accessing the Swagger UI
 - Open your browser and navigate to http://localhost:5040/swagger/ to view the Swagger UI.
