@@ -9,6 +9,7 @@ dependencies = [
     "django-cors-headers",
     "djangorestframework",
     "drf-yasg",
+    "faster-whisper>=1.2.1",
     "flask",
     "flask-cors",
     "flask-restx",

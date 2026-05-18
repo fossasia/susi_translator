@@ -5,4 +5,5 @@ __pycache__
 django/db.sqlite3
 django/static/*
 venv/
-.venv/
+.env*
+flask/lang_map.yaml
