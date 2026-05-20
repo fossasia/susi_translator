@@ -1,0 +1,16 @@
+whisper_to_nllb_lang:
+  en: eng_Latn
+  de: deu_Latn
+  fr: fra_Latn
+  es: spa_Latn
+  hi: hin_Deva
+  zh: zho_Hans
+  ar: arb_Arab
+  pt: por_Latn
+  ru: rus_Cyrl
+  ja: jpn_Jpan
+  bn: ben_Beng
+  tr: tur_Latn
+  ko: kor_Hang
+  it: ita_Latn
+  nl: nld_Latn
