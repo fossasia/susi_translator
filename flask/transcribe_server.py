@@ -85,10 +85,6 @@ else:
 nllb_model_name = os.getenv('NLLB_MODEL', 'facebook/nllb-200-distilled-600M')
 nllb_tokenizer = AutoTokenizer.from_pretrained(nllb_model_name)
 nllb_model = AutoModelForSeq2SeqLM.from_pretrained(nllb_model_name).to(device)
-<<<<<<< Updated upstream
-
-=======
->>>>>>> Stashed changes
 nllb_model.eval()
 logger.info(f"NLLB-200 translation model loaded: {nllb_model_name}")
 
@@ -130,11 +126,6 @@ WHISPER_TO_NLLB_LANG = _load_lang_map()
 
 def nllb_translate(text, src_lang_whisper, tgt_lang_nllb):
     # translate text from source language to target language using NLLB-200
-<<<<<<< Updated upstream
-  
-=======
-
->>>>>>> Stashed changes
     src_lang_nllb = WHISPER_TO_NLLB_LANG.get(src_lang_whisper, 'eng_Latn')
     if src_lang_nllb == tgt_lang_nllb:
         # no translation needed if source and target are the same language
@@ -143,11 +134,6 @@ def nllb_translate(text, src_lang_whisper, tgt_lang_nllb):
     nllb_tokenizer.src_lang = src_lang_nllb
     inputs = nllb_tokenizer(text, return_tensors='pt', padding=True).to(device)
     target_lang_id = nllb_tokenizer.convert_tokens_to_ids(tgt_lang_nllb)
-<<<<<<< Updated upstream
-    
-=======
-
->>>>>>> Stashed changes
     # reducing memory overhead and speeding up generation vs. no context manager
     with torch.inference_mode():
         translated_tokens = nllb_model.generate(
@@ -225,11 +211,7 @@ def process_audio():
                 continue
 
             # Transcribe the audio data using the Whisper model or whisper.cpp server
-<<<<<<< Updated upstream
-      
-=======
          
->>>>>>> Stashed changes
             # branches now route through the HTTP server and parse the JSON response into
             # a consistent `result` dict. model_smart/model_fast are never referenced in
             # server mode, so the uninitialized-variable crash is also eliminated.
@@ -265,11 +247,7 @@ def process_audio():
             detected_lang = result.get('language', 'en')
 
             if is_valid(transcript):
-<<<<<<< Updated upstream
-                
-=======
                
->>>>>>> Stashed changes
                 # full translated text to DEBUG to avoid leaking sensitive content in production
                 # logs. Set LOG_TRANSLATED_AT_INFO=true in .env to restore INFO-level logging.
                 log_translated_at_info = os.getenv('LOG_TRANSLATED_AT_INFO', 'false') == 'true'
@@ -326,7 +304,7 @@ def process_audio():
             # note: when Redis is active this is a no-op since Redis TTL handles expiry automatically
             clean_old_transcripts()
 
-        # Mark the task as done
+            # Mark the task as done
         except Exception as e:
             logger.error(f"Error processing audio chunk {chunk_id}", exc_info=True)
         finally:
@@ -426,18 +404,11 @@ transcribe_input_model = api.model('TranscribeInput', {
     'audio_b64': fields.String(required=True, description='Base64 encoded audio data'),
     'chunk_id': fields.String(required=True, description='ID of the audio chunk'),
     'tenant_id': fields.String(required=False, description='Tenant ID', default='0000'),
-<<<<<<< Updated upstream
     # source_type is sent by the new AudioGrabber to indicate which AudioSource produced this chunk
     'source_type': fields.String(required=False, description='Audio source type: mic, file, or url', default='mic')
 })
 
-transcribe_response_model = api.model('Transcribe', {
-=======
-    'source_type': fields.String(required=False, description='Audio source type: mic, file, or url', default='mic')
-})
-
 transcribe_response_model = api.model('TranscribeResponse', {
->>>>>>> Stashed changes
     'chunk_id': fields.String(description='ID of the audio chunk'),
     'tenant_id': fields.String(description='Tenant ID'),
     'status': fields.String(description='processing flag')
@@ -492,13 +463,6 @@ class Transcribe(Resource):
             the source_type specified as a query parameter or in the JSON body'''
         try:
             data = request.get_json(force=True)
-<<<<<<< Updated upstream
-            # source_type resolution order:
-            #   1. query param  (?source_type=file)  — preferred, used by Django demo client
-            #   2. JSON body field (source_type: "mic") — used by AudioGrabber and old clients
-            #   3. default 'mic' for backward compatibility with old AudioGrabber
-=======
->>>>>>> Stashed changes
             source_type = (
                 request.args.get('source_type')
                 or (data.get('source_type') if data else None)
@@ -509,13 +473,7 @@ class Transcribe(Resource):
             logger.error("Error in /transcribe", exc_info=True)
             return {"error": str(e)}, 500
 
-<<<<<<< Updated upstream
-# source_type is passed as a query param: POST /transcribe?source_type=mic|file|url
-# sub-routes removed; use /transcribe?source_type=<type> for all audio sources
-
-=======
 #source_type is passed as a query param, POST /transcribe?source_type=mic,file,url
->>>>>>> Stashed changes
 @api.route('/get_transcript')
 class GetTranscript(Resource):
     @api.doc(params={
@@ -540,11 +498,7 @@ class GetTranscript(Resource):
 
         t = transcriptd.get(tenant_id, {})
         if len(t) == 0:
-<<<<<<< Updated upstream
-        
-=======
             
->>>>>>> Stashed changes
             return jsonify({'chunk_id': '-1', 'transcript': '', 'translated': ''})
         else:
             sentences = request.args.get('sentences', default='false') == 'true'
@@ -554,204 +508,6 @@ class GetTranscript(Resource):
             else:
                 return jsonify({'chunk_id': chunk_id, 'transcript': '', 'translated': ''})
 
-<<<<<<< Updated upstream
-@api.route('/get_first_transcript')
-class GetFirstTranscript(Resource):
-    @api.doc(params={
-        'tenant_id': {'description': 'Tenant ID', 'default': '0000'},
-        'sentences': {'description': 'Merge and split transcripts into sentences', 'type': 'boolean', 'default': False},
-        'from'     : {'description': 'Starting chunk ID', 'type': 'string', 'default': '0'}
-    })
-    @api.response(200, 'Success', transcript_response_model)
-    @api.response(404, 'Transcript Not Found')
-    def get(self):
-        '''
-        Get first transcript endpoint: Retrieve the first transcript for a given tenant_id
-        '''
-        tenant_id = request.args.get('tenant_id', '0000')
-        fromid = request.args.get('from', default='0')
-
-   
-        if redis_client:
-            chunk_ids = sorted(
-                [k for k in redis_list_transcript_keys(tenant_id) if int(k) >= int(fromid)],
-                key=int
-            )
-            if not chunk_ids:
-                return jsonify({'chunk_id': '-1', 'transcript': '', 'translated': ''})
-            first_chunk_id = chunk_ids[0]
-            entry = redis_get_transcript(tenant_id, first_chunk_id)
-            return jsonify({
-                'chunk_id': first_chunk_id,
-                'transcript': entry.get('original', ''),
-                'translated': entry.get('translated', '')
-            })
-
-        t = transcriptd.get(tenant_id, {})
-        if len(t) == 0:
-           
-            return jsonify({'chunk_id': '-1', 'transcript': '', 'translated': ''})
-        else:
-            sentences = request.args.get('sentences', default='false') == 'true'
-            if sentences == 'true': t = merge_and_split_transcripts(t)
-            first_chunk_id = next((k for k in sorted(t.keys()) if int(k) >= int(fromid)), None)
-            if first_chunk_id is None:
-                return jsonify({'chunk_id': '-1', 'transcript': '', 'translated': ''})
-            entry = t[first_chunk_id]
-            return jsonify({
-                'chunk_id': first_chunk_id,
-                'transcript': entry['transcript'],
-                'translated': entry.get('translated', '')
-            })
-
-@api.route('/pop_first_transcript')
-class PopFirstTranscript(Resource):
-    @api.doc(params={
-        'tenant_id': {'description': 'Tenant ID', 'default': '0000'},
-        'sentences': {'description': 'Merge and split transcripts into sentences', 'type': 'boolean', 'default': False},
-        'from'     : {'description': 'Starting chunk ID', 'type': 'string', 'default': '0'}
-    })
-    @api.response(200, 'Success', transcript_response_model)
-    @api.response(404, 'Transcript Not Found')
-    def get(self):
-        '''
-        Pop first transcript endpoint: Retrieve and remove the first transcript for a given tenant_id
-        '''
-        tenant_id = request.args.get('tenant_id', '0000')
-        fromid = request.args.get('from', default='0')
-
-        if redis_client:
-            chunk_ids = sorted(
-                [k for k in redis_list_transcript_keys(tenant_id) if int(k) >= int(fromid)],
-                key=int
-            )
-            if not chunk_ids:
-                return jsonify({'chunk_id': '-1', 'transcript': '', 'translated': ''})
-            first_chunk_id = chunk_ids[0]
-            entry = redis_get_transcript(tenant_id, first_chunk_id)
-            redis_client.delete(f"transcript:{tenant_id}:{first_chunk_id}")
-            return jsonify({
-                'chunk_id': first_chunk_id,
-                'transcript': entry.get('original', ''),
-                'translated': entry.get('translated', '')
-            })
-
-        t = transcriptd.get(tenant_id, {})
-        if len(t) == 0:
-           
-            return jsonify({'chunk_id': '-1', 'transcript': '', 'translated': ''})
-        else:
-            sentences = request.args.get('sentences', default='false') == 'true'
-            if sentences == 'true': t = merge_and_split_transcripts(t)
-            first_chunk_id = next((k for k in sorted(t.keys()) if int(k) >= int(fromid)), None)
-            if first_chunk_id is None:
-                return jsonify({'chunk_id': '-1', 'transcript': '', 'translated': ''})
-            entry = t.pop(first_chunk_id)
-            return jsonify({
-                'chunk_id': first_chunk_id,
-                'transcript': entry['transcript'],
-                'translated': entry.get('translated', '')
-            })
-
-@api.route('/get_latest_transcript')
-class GetLatestTranscript(Resource):
-    @api.doc(params={
-        'tenant_id': {'description': 'Tenant ID', 'default': '0000'},
-        'sentences': {'description': 'Merge and split transcripts into sentences', 'type': 'boolean', 'default': False},
-        'until': {'description': 'End chunk ID', 'type': 'string', 'default': str(int(time.time() * 1000))}
-    })
-    @api.response(200, 'Success', transcript_response_model)
-    @api.response(404, 'Transcript Not Found')
-    def get(self):
-        '''
-        Get latest transcript endpoint: Retrieve the latest transcript for a given tenant_id
-        '''
-        tenant_id = request.args.get('tenant_id', '0000')
-        untilid = request.args.get('until', default=str(int(time.time() * 1000)))
-
-      
-        if redis_client:
-            chunk_ids = sorted(
-                [k for k in redis_list_transcript_keys(tenant_id) if int(k) < int(untilid)],
-                key=int, reverse=True
-            )
-            if not chunk_ids:
-                return jsonify({'chunk_id': '-1', 'transcript': '', 'translated': ''})
-            latest_chunk_id = chunk_ids[0]
-            entry = redis_get_transcript(tenant_id, latest_chunk_id)
-            return jsonify({
-                'chunk_id': latest_chunk_id,
-                'transcript': entry.get('original', ''),
-                'translated': entry.get('translated', '')
-            })
-
-        t = transcriptd.get(tenant_id, {})
-        if len(t) == 0:
-       
-            return jsonify({'chunk_id': '-1', 'transcript': '', 'translated': ''})
-        else:
-            sentences = request.args.get('sentences', default='false') == 'true'
-            if sentences == 'true': t = merge_and_split_transcripts(t)
-            latest_chunk_id = next((k for k in sorted(t.keys(), reverse=True) if int(k) < int(untilid)), None)
-            if latest_chunk_id is None:
-                return jsonify({'chunk_id': '-1', 'transcript': '', 'translated': ''})
-            entry = t[latest_chunk_id]
-            return jsonify({
-                'chunk_id': latest_chunk_id,
-                'transcript': entry['transcript'],
-                'translated': entry.get('translated', '')
-            })
-
-@api.route('/pop_latest_transcript')
-class PopLatestTranscript(Resource):
-    @api.doc(params={
-        'tenant_id': {'description': 'Tenant ID', 'default': '0000'},
-        'sentences': {'description': 'Merge and split transcripts into sentences', 'type': 'boolean', 'default': False},
-        'until': {'description': 'End chunk ID', 'type': 'string', 'default': str(int(time.time() * 1000))}
-    })
-    @api.response(200, 'Success', transcript_response_model)
-    @api.response(404, 'Transcript Not Found')
-    def get(self):
-        '''
-        Get latest transcript endpoint: Retrieve and remove the latest transcript for a given tenant_id
-        '''
-        tenant_id = request.args.get('tenant_id', '0000')
-        untilid = request.args.get('until', default=str(int(time.time() * 1000)))
-
-     
-        if redis_client:
-            chunk_ids = sorted(
-                [k for k in redis_list_transcript_keys(tenant_id) if int(k) < int(untilid)],
-                key=int, reverse=True
-            )
-            if not chunk_ids:
-                return jsonify({'chunk_id': '-1', 'transcript': '', 'translated': ''})
-            latest_chunk_id = chunk_ids[0]
-            entry = redis_get_transcript(tenant_id, latest_chunk_id)
-            redis_client.delete(f"transcript:{tenant_id}:{latest_chunk_id}")
-            return jsonify({
-                'chunk_id': latest_chunk_id,
-                'transcript': entry.get('original', ''),
-                'translated': entry.get('translated', '')
-            })
-
-        t = transcriptd.get(tenant_id, {})
-        if len(t) == 0:
-           
-            return jsonify({'chunk_id': '-1', 'transcript': '', 'translated': ''})
-        else:
-            sentences = request.args.get('sentences', default='false') == 'true'
-            if sentences == 'true': t = merge_and_split_transcripts(t)
-            latest_chunk_id = next((k for k in sorted(t.keys(), reverse=True) if int(k) < int(untilid)), None)
-            if latest_chunk_id is None:
-                return jsonify({'chunk_id': '-1', 'transcript': '', 'translated': ''})
-            entry = t.pop(latest_chunk_id)
-            return jsonify({
-                'chunk_id': latest_chunk_id,
-                'transcript': entry['transcript'],
-                'translated': entry.get('translated', '')
-            })
-=======
 # @api.route('/get_first_transcript')
 # class GetFirstTranscript(Resource):
 #     @api.doc(params={
@@ -944,7 +700,6 @@ class PopLatestTranscript(Resource):
 #                 'transcript': entry['transcript'],
 #                 'translated': entry.get('translated', '')
 #             })
->>>>>>> Stashed changes
    
 # @api.route('/delete_transcript')
 # class DeleteTranscript(Resource):
@@ -961,24 +716,6 @@ class PopLatestTranscript(Resource):
 #         tenant_id = request.args.get('tenant_id', '0000')
 #         chunk_id = request.args.get('chunk_id')
 
-<<<<<<< Updated upstream
-        # delete from Redis if available; fall back to in-memory transcriptd
-        if redis_client:
-            key = f"transcript:{tenant_id}:{chunk_id}"
-            entry = redis_client.hgetall(key)
-            redis_client.delete(key)
-           
-            return jsonify({'chunk_id': chunk_id, 'transcript': entry.get('original', ''), 'translated': entry.get('translated', '')})
-
-        t = transcriptd.get(tenant_id, {})
-        sentences = request.args.get('sentences', default='false') == 'true'
-        if sentences == 'true': t = merge_and_split_transcripts(t)
-        if chunk_id in t:
-            entry = t.pop(chunk_id, None)
-            return jsonify({'chunk_id': chunk_id, 'transcript': entry['transcript'], 'translated': entry.get('translated', '')})
-        else:
-            return jsonify({'chunk_id': chunk_id, 'transcript': '', 'translated': ''})
-=======
 #         # delete from Redis if available; fall back to in-memory transcriptd
 #         if redis_client:
 #             key = f"transcript:{tenant_id}:{chunk_id}"
@@ -995,7 +732,6 @@ class PopLatestTranscript(Resource):
 #             return jsonify({'chunk_id': chunk_id, 'transcript': entry['transcript'], 'translated': entry.get('translated', '')})
 #         else:
 #             return jsonify({'chunk_id': chunk_id, 'transcript': '', 'translated': ''})
->>>>>>> Stashed changes
 
 @api.route('/list_transcripts')
 class ListTranscripts(Resource):
@@ -1074,12 +810,6 @@ class SetLanguageConfig(Resource):
         '''
         set source and target language for a given tenant_id; used by NLLB-200 translation pipeline
         '''
-<<<<<<< Updated upstream
-        # language config resolution order:
-        #   1. JSON body  — preferred, used by Django demo client (flask_client.set_language_config)
-        #   2. query params — used by direct API / Swagger calls
-=======
->>>>>>> Stashed changes
         body = request.get_json(silent=True) or {}
         tenant_id   = body.get('tenant_id')   or request.args.get('tenant_id',   '0000')
         source_lang = body.get('source_lang') or request.args.get('source_lang', 'en')
