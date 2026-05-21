@@ -23,3 +23,8 @@ python-dotenv
 requests
 scipy
 torch
+redis
+dotenv
+faster-whisper
+transformers
+soundfile

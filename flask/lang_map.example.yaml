@@ -1,0 +1,8 @@
+# Maps Whisper language codes to NLLB-200 BCP-47 language tags
+# Full list of NLLB-200 supported languages:
+# https://github.com/facebookresearch/flores/blob/main/flores200/README.md
+
+# whisper_to_nllb_lang:
+#   en: eng_Latn   # English
+#   de: deu_Latn   # German
+
