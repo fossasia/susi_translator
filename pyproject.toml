@@ -26,3 +26,13 @@ dependencies = [
 
 [tool.uv]
 package = false
+
+[dependency-groups]
+# Install with `uv sync --group dev` to pick up test-only deps.
+dev = [
+    "pytest>=7.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["flask/tests"]
+addopts = "-ra"

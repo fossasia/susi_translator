@@ -6,3 +6,20 @@ django/db.sqlite3
 django/static/*
 venv/
 .venv/
+
+# Local env file — contains per-user runtime config and may include secrets.
+# Always read .env.example for the documented keys; never check in .env itself.
+.env
+
+# Pytest / IDE caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Sample audio fixtures used for manual end-to-end testing.
+# Large binaries; not part of the source tree.
+flask/speech.mp3
+flask/speech.pcm
+flask/tone.pcm
+*.pcm
+*.mp3
