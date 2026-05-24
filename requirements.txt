@@ -18,8 +18,17 @@ mkdocs-bootswatch
 numpy
 openai-whisper
 pyaudio
-pybars3
-python-dotenv
-requests
+numpy
 scipy
 torch
+
+# Flask server
+flask
+flask-restx
+flask-cors
+flask-sock
+simple-websocket
+
+# Utilities
+pybars3
+python-dotenv
