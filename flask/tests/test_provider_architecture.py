@@ -87,6 +87,24 @@ class ConfigCapturingProvider(TranslationProvider):
     @property
     def provider_name(self):
         return "config_capturing"
+    
+
+class KwargsCapturingProvider(TranslationProvider):
+    """Stores the kwargs passed to translate() so tests can assert on them"""
+    def __init__(self, config=None):
+        super().__init__(config)
+        self.last_kwargs = {}
+
+    def translate(self, text, source_lang, target_lang, **kwargs):
+        self.last_kwargs = kwargs
+        return f"translated:{text}"
+
+    def is_available(self):
+        return True
+
+    @property
+    def provider_name(self):
+        return "kwargs_capturing"
 
 
 
@@ -160,6 +178,28 @@ class TestLazyInstantiation:
         assert registry._tenants["tenant1"]["instance"] is not None
 
 
+
+# Translation tests
+class TestTranslate:
+    def test_translate_forwards_kwargs(self, registry: ProviderRegistry) -> None:
+        """Ensures kwargs like 'temperature' and 'formality' are passed to the provider"""
+        register_provider(
+            "kwargs_capturing", 
+            lambda config: KwargsCapturingProvider(config)
+        )
+        registry.configure("tenant1", "kwargs_capturing")
+        
+        registry.translate(
+            "tenant1", 
+            "hello", 
+            "en", 
+            "de", 
+            temperature=0.3, 
+            formality="informal"
+        )
+        
+        instance = registry._tenants["tenant1"]["instance"]
+        assert instance.last_kwargs == {"temperature": 0.3, "formality": "informal"}
 
 
 # Translation & Multi-tenant tests
