@@ -201,6 +201,28 @@ class TestTranslate:
         instance = registry._tenants["tenant1"]["instance"]
         assert instance.last_kwargs == {"temperature": 0.3, "formality": "informal"}
 
+    def test_translation_error_propagates(self, registry: ProviderRegistry) -> None:
+        """Ensure runtime TranslationErrors from the provider are properly propagated."""
+        register_provider("failing", lambda config: FailingProvider(config))
+        registry.configure("tenant1", "failing")
+        
+        # The provider is designed to fail when translate is called
+        with pytest.raises(TranslationError, match="intentional failure"):
+            registry.translate("tenant1", "hello", "en", "de")
+
+    def test_factory_error_raises_provider_config_error(self, registry: ProviderRegistry) -> None:
+        """Ensure errors during lazy initialization are caught and wrapped correctly."""
+        def bad_factory(config):
+            raise RuntimeError("missing heavy ML weights")
+
+        register_provider("broken", bad_factory)
+        registry.configure("tenant1", "broken")
+        
+        # The initialization happens lazily during the first translate call.
+        # It should catch the RuntimeError and wrap it in a ProviderConfigError.
+        with pytest.raises(ProviderConfigError, match="Provider initialization failed"):
+            registry.translate("tenant1", "hello", "en", "de")
+
 
 # Translation & Multi-tenant tests
 
