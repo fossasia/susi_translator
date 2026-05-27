@@ -63,6 +63,78 @@ Flask backend bind / safety:
 
 `requirements.txt` is kept for compatibility, but `uv sync` is the supported install flow.
 
+## Audio grabber (client-side ingestion)
+
+The grabber under `flask/audio_grabber.py` captures audio from one of five
+sources and streams it to the transcription server. Each source runs
+client-side; the server only ever receives already-decoded base64 PCM via
+`POST /transcribe`.
+
+| Source    | Backend                 | Extra requirements                |
+| --------- | ----------------------- | --------------------------------- |
+| `mic`     | PyAudio                 | a working input device            |
+| `file`    | pydub + ffmpeg          | ffmpeg on PATH                    |
+| `url`     | ffmpeg                  | ffmpeg on PATH                    |
+| `stdin`   | raw PCM passthrough     | none                              |
+| `youtube` | yt-dlp + ffmpeg         | ffmpeg on PATH (yt-dlp via `uv sync`) |
+
+Examples:
+
+```bash
+uv run python flask/audio_grabber.py mic
+uv run python flask/audio_grabber.py file --path talk.mp3 --realtime
+uv run python flask/audio_grabber.py url --url https://example.com/live.m3u8
+uv run python flask/audio_grabber.py youtube --url https://www.youtube.com/live/EXAMPLE_ID
+ffmpeg -i input.wav -f s16le -ac 1 -ar 16000 - | \
+    uv run python flask/audio_grabber.py stdin
+```
+
+Read the resulting transcripts back via `?source=<name>`:
+
+```bash
+curl "http://localhost:5040/list_transcripts?source=youtube"
+curl "http://localhost:5040/pop_first_transcript?source=youtube"
+```
+
+The `youtube` source resolves the supplied URL via yt-dlp (default format
+selector `bestaudio/best`, override with `--format`), pipes the resulting
+direct media URL through ffmpeg, and auto-reconnects on transient stream
+interruptions with capped exponential backoff. The host must be a
+recognised YouTube domain; arbitrary `https://...` URLs are rejected.
+
+### YouTube authentication ("Sign in to confirm you're not a bot")
+
+YouTube increasingly returns
+
+```
+ERROR: [youtube] <id>: Sign in to confirm you're not a bot.
+       Use --cookies-from-browser or --cookies for the authentication.
+```
+
+for requests from data-center IPs, VPNs, or WSL. This is a YouTube
+policy, not a bug; yt-dlp itself can't bypass it. Pass cookies from a
+logged-in YouTube session using one of these mutually exclusive flags:
+
+```bash
+# Option A: read cookies straight from your browser (does NOT work
+# reliably on WSL because the Windows browser's cookie store sits
+# outside the WSL filesystem):
+uv run python flask/audio_grabber.py youtube \
+    --url https://www.youtube.com/watch?v=EXAMPLE_ID \
+    --cookies-from-browser chrome
+
+# Option B: export cookies.txt from your browser (Netscape format,
+# via a 'Get cookies.txt LOCALLY' or similar extension while logged
+# into youtube.com), then point --cookies at the file. This is the
+# reliable path on WSL:
+uv run python flask/audio_grabber.py youtube \
+    --url https://www.youtube.com/watch?v=EXAMPLE_ID \
+    --cookies /path/to/youtube-cookies.txt
+```
+
+Treat the cookies file like a credential — it grants access to your
+YouTube account. Do not commit it to git.
+
 ## Tests
 
 A pytest suite for the Flask backend lives under `flask/tests/`.

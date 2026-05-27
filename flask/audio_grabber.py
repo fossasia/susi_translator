@@ -1,8 +1,8 @@
 """
 SUSI Translator audio grabber (refactored orchestrator).
 
-Reads audio from one of four sources (microphone, file, URL, stdin),
-buffers up to ~10 seconds while resetting on silence, and POSTs
+Reads audio from one of five sources (microphone, file, URL, stdin,
+YouTube), buffers up to ~10 seconds while resetting on silence, and POSTs
 base64-encoded chunks to the transcription server's ``/transcribe``
 endpoint.
 
@@ -12,23 +12,25 @@ The POST body shape is unchanged from the original implementation::
 
 System requirements
 -------------------
-- ``mic``   : pyaudio (live capture).
-- ``file``  : pydub Python package + the ``ffmpeg`` binary on PATH.
-- ``url``   : the ``ffmpeg`` binary on PATH.
-- ``stdin`` : none beyond the standard library.
+- ``mic``     : pyaudio (live capture).
+- ``file``    : pydub Python package + the ``ffmpeg`` binary on PATH.
+- ``url``     : the ``ffmpeg`` binary on PATH.
+- ``stdin``   : none beyond the standard library.
+- ``youtube`` : the ``yt-dlp`` Python package + the ``ffmpeg`` binary on
+                PATH.
 
 Tenant IDs (auto-managed)
 -------------------------
 The grabber never asks the user for a tenant id. On startup it calls
 ``POST /session`` with the chosen subcommand (``mic``/``file``/``url``/
-``stdin``); the server mints a fresh tenant_id (uuid) and records it as
-the latest session for that source.
+``stdin``/``youtube``); the server mints a fresh tenant_id (uuid) and
+records it as the latest session for that source.
 
 To fetch transcripts, curl with ``?source=<name>`` instead of
 ``?tenant_id=...``::
 
     curl "http://localhost:5040/pop_first_transcript?source=mic"
-    curl "http://localhost:5040/pop_first_transcript?source=file"
+    curl "http://localhost:5040/pop_first_transcript?source=youtube"
 
 The server resolves ``source=mic`` to "the most recent mic session", so
 each fresh run gives you a clean bucket of transcripts under that fixed
@@ -42,6 +44,7 @@ Examples
     python audio_grabber.py mic --server http://localhost:5040
     python audio_grabber.py file --path talk.mp3 --realtime
     python audio_grabber.py url  --url https://example.com/stream.mp3
+    python audio_grabber.py youtube --url https://www.youtube.com/live/EXAMPLE_ID
     ffmpeg -i input.wav -f s16le -ac 1 -ar 16000 - | \\
         python audio_grabber.py stdin
 """
@@ -67,6 +70,7 @@ from audio_sources import (
     MicrophoneSource,
     StdinSource,
     URLSource,
+    YouTubeSource,
 )
 
 
@@ -77,7 +81,7 @@ BUFFER_SIZE: int = 2 * 10 * RATE  # bytes -> 10 seconds of audio
 SILENCE_THRESHOLD: int = 500
 
 DEFAULT_SERVER: str = "http://localhost:5040"
-VALID_SOURCES = ("mic", "file", "url", "stdin")
+VALID_SOURCES = ("mic", "file", "url", "stdin", "youtube")
 
 
 # ---------------------------------------------------------------------------
@@ -289,7 +293,7 @@ def _build_parser() -> argparse.ArgumentParser:
         prog="audio_grabber",
         description=(
             "Capture audio from various sources (microphone, file, URL, "
-            "stdin) and stream it to the SUSI transcription server."
+            "stdin, YouTube) and stream it to the SUSI transcription server."
         ),
     )
     parser.add_argument(
@@ -309,7 +313,7 @@ def _build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(
         dest="source",
         required=True,
-        metavar="{mic,file,url,stdin}",
+        metavar="{mic,file,url,stdin,youtube}",
         help="Audio source to use.",
     )
 
@@ -351,6 +355,46 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Read raw 16 kHz / 16-bit / mono PCM from stdin.",
     )
 
+    p_yt = sub.add_parser(
+        "youtube",
+        help="Decode a YouTube (Live or VOD) URL via yt-dlp + ffmpeg.",
+    )
+    p_yt.add_argument(
+        "--url",
+        required=True,
+        help="YouTube watch / live URL.",
+    )
+    p_yt.add_argument(
+        "--format",
+        default="bestaudio/best",
+        help="yt-dlp format selector (default: bestaudio/best).",
+    )
+    # YouTube increasingly returns "Sign in to confirm you're not a bot"
+    # for data-center / VPN / WSL IPs. Pass cookies via one of these two
+    # mutually exclusive channels to authenticate.
+    yt_auth = p_yt.add_mutually_exclusive_group()
+    yt_auth.add_argument(
+        "--cookies",
+        dest="cookies_path",
+        default=None,
+        help=(
+            "Path to a Netscape-format cookies.txt file (export from your "
+            "browser via a 'Get cookies.txt' extension while logged into "
+            "YouTube). Bypasses YouTube's bot challenge."
+        ),
+    )
+    yt_auth.add_argument(
+        "--cookies-from-browser",
+        dest="cookies_from_browser",
+        default=None,
+        help=(
+            "Browser to read YouTube cookies from directly "
+            "(e.g. chrome, firefox, edge, brave). Note: on WSL this often "
+            "fails because the Windows browser's cookie store is outside "
+            "the WSL filesystem; prefer --cookies on WSL."
+        ),
+    )
+
     return parser
 
 
@@ -363,6 +407,13 @@ def _build_source(args: argparse.Namespace) -> AudioSource:
         return URLSource(url=args.url)
     if args.source == "stdin":
         return StdinSource()
+    if args.source == "youtube":
+        return YouTubeSource(
+            url=args.url,
+            format_selector=args.format,
+            cookies_path=args.cookies_path,
+            cookies_from_browser=args.cookies_from_browser,
+        )
     raise ValueError(f"Unknown source: {args.source}")
 
 
