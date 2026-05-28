@@ -96,7 +96,8 @@ else:
     import torch  # noqa: WPS433  (deferred import is intentional)
     import whisper  # noqa: WPS433  (deferred import is intentional)
 
-    device = os.getenv('WHISPER_DEVICE', 'cuda' if torch.cuda.is_available() else 'cpu')
+    print("TORCH CUDA:", torch.cuda.is_available())
+    print("DEVICE COUNT:", torch.cuda.device_count())
     logger.info(f"Hardware detection: using {device}")
 
     # Download (or load) two whisper models. If the download via the whisper
@@ -131,14 +132,14 @@ transcripts_lock = threading.Lock()
 audio_stack = queue.Queue()
 
 # Per-source "latest session" registry.
-# Each grabber run calls POST /session?source=<mic|file|url|stdin> at startup;
+# Each grabber run calls POST /session?source=<mic|file|url|stdin|youtube> at startup;
 # the server mints a fresh tenant_id (uuid) and remembers it as the latest
 # tenant_id for that source along with a creation timestamp. Read endpoints
 # accept ?source=<name> as a convenience that resolves to the latest active
 # tenant_id for that source, so the user never has to type or remember the
 # uuid in curl commands. Stale sessions (older than SESSION_TTL_SECONDS)
 # are evicted on resolve.
-VALID_SOURCES = {"mic", "file", "url", "stdin"}
+VALID_SOURCES = {"mic", "file", "url", "stdin", "youtube"}
 latest_session_by_source = {s: None for s in VALID_SOURCES}  # source -> (tenant_id, created_ts) or None
 session_lock = threading.Lock()
 
@@ -213,7 +214,7 @@ def _resolve_tenant(args, default='0000'):
 
     Priority:
       1. Explicit ?tenant_id=<id> wins (covers manual override / debugging).
-      2. ?source=<mic|file|url|stdin> resolves to the most recently
+      2. ?source=<mic|file|url|stdin|youtube> resolves to the most recently
          registered, non-expired session for that source. An unknown
          source value aborts with HTTP 400 so client typos surface
          loudly instead of masquerading as "no transcripts yet". A known
@@ -535,7 +536,7 @@ size_response_model = api.model('SizeResponse', {
 session_input_model = api.model('SessionRequest', {
     'source': fields.String(
         required=True,
-        description='Input source name; one of: mic, file, url, stdin',
+        description='Input source name; one of: mic, file, url, stdin, youtube',
         enum=sorted(VALID_SOURCES),
     ),
 })
@@ -556,10 +557,10 @@ class Session(Resource):
         Start a new transcription session for an input source.
 
         The grabber calls this once per run, passing its source name
-        (mic/file/url/stdin). The server mints a fresh tenant_id (uuid)
-        and records it as the latest session for that source. Subsequent
-        read requests using ?source=<name> resolve to this tenant_id, so
-        the user never has to know or type the uuid.
+        (mic/file/url/stdin/youtube). The server mints a fresh tenant_id
+        (uuid) and records it as the latest session for that source.
+        Subsequent read requests using ?source=<name> resolve to this
+        tenant_id, so the user never has to know or type the uuid.
         '''
         try:
             data = request.get_json(force=True, silent=True) or {}
@@ -627,7 +628,7 @@ class Transcribe(Resource):
 class GetTranscript(Resource):
     @api.doc(params={
         'tenant_id': {'description': 'Tenant ID', 'default': '0000'},
-        'source':    {'description': 'Resolve to the latest session for a source (mic|file|url|stdin). Ignored if tenant_id is given. Unknown values return HTTP 400.', 'type': 'string', 'enum': ['mic', 'file', 'url', 'stdin']},
+        'source':    {'description': 'Resolve to the latest session for a source (mic|file|url|stdin). Ignored if tenant_id is given. Unknown values return HTTP 400.', 'type': 'string', 'enum': ['mic', 'file', 'url', 'stdin', 'youtube']},
         'chunk_id' : {'description': 'Chunk ID'},
         'sentences': {'description': 'Merge and split transcripts into sentences', 'type': 'boolean', 'default': False}
     })
@@ -656,7 +657,7 @@ class GetTranscript(Resource):
 class GetFirstTranscript(Resource):
     @api.doc(params={
         'tenant_id': {'description': 'Tenant ID', 'default': '0000'},
-        'source':    {'description': 'Resolve to the latest session for a source (mic|file|url|stdin). Ignored if tenant_id is given. Unknown values return HTTP 400.', 'type': 'string', 'enum': ['mic', 'file', 'url', 'stdin']},
+        'source':    {'description': 'Resolve to the latest session for a source (mic|file|url|stdin). Ignored if tenant_id is given. Unknown values return HTTP 400.', 'type': 'string', 'enum': ['mic', 'file', 'url', 'stdin', 'youtube']},
         'sentences': {'description': 'Merge and split transcripts into sentences', 'type': 'boolean', 'default': False},
         'from'     : {'description': 'Starting chunk ID', 'type': 'string', 'default': '0'}
     })
@@ -688,7 +689,7 @@ class GetFirstTranscript(Resource):
 class PopFirstTranscript(Resource):
     @api.doc(params={
         'tenant_id': {'description': 'Tenant ID', 'default': '0000'},
-        'source':    {'description': 'Resolve to the latest session for a source (mic|file|url|stdin). Ignored if tenant_id is given. Unknown values return HTTP 400.', 'type': 'string', 'enum': ['mic', 'file', 'url', 'stdin']},
+        'source':    {'description': 'Resolve to the latest session for a source (mic|file|url|stdin). Ignored if tenant_id is given. Unknown values return HTTP 400.', 'type': 'string', 'enum': ['mic', 'file', 'url', 'stdin', 'youtube']},
         'sentences': {'description': 'Merge and split transcripts into sentences', 'type': 'boolean', 'default': False},
         'from'     : {'description': 'Starting chunk ID', 'type': 'string', 'default': '0'}
     })
@@ -704,7 +705,7 @@ class PopFirstTranscript(Resource):
 
     @api.doc(params={
         'tenant_id': {'description': 'Tenant ID', 'default': '0000'},
-        'source':    {'description': 'Resolve to the latest session for a source.', 'type': 'string', 'enum': ['mic', 'file', 'url', 'stdin']},
+        'source':    {'description': 'Resolve to the latest session for a source.', 'type': 'string', 'enum': ['mic', 'file', 'url', 'stdin', 'youtube']},
         'sentences': {'description': 'Merge and split transcripts into sentences', 'type': 'boolean', 'default': False},
         'from'     : {'description': 'Starting chunk ID', 'type': 'string', 'default': '0'}
     })
@@ -748,7 +749,7 @@ class PopFirstTranscript(Resource):
 class GetLatestTranscript(Resource):
     @api.doc(params={
         'tenant_id': {'description': 'Tenant ID', 'default': '0000'},
-        'source':    {'description': 'Resolve to the latest session for a source (mic|file|url|stdin). Ignored if tenant_id is given. Unknown values return HTTP 400.', 'type': 'string', 'enum': ['mic', 'file', 'url', 'stdin']},
+        'source':    {'description': 'Resolve to the latest session for a source (mic|file|url|stdin). Ignored if tenant_id is given. Unknown values return HTTP 400.', 'type': 'string', 'enum': ['mic', 'file', 'url', 'stdin', 'youtube']},
         'sentences': {'description': 'Merge and split transcripts into sentences', 'type': 'boolean', 'default': False},
         'until': {'description': 'End chunk ID (defaults to "now" in ms)', 'type': 'string'}
     })
@@ -780,7 +781,7 @@ class GetLatestTranscript(Resource):
 class PopLatestTranscript(Resource):
     @api.doc(params={
         'tenant_id': {'description': 'Tenant ID', 'default': '0000'},
-        'source':    {'description': 'Resolve to the latest session for a source (mic|file|url|stdin). Ignored if tenant_id is given. Unknown values return HTTP 400.', 'type': 'string', 'enum': ['mic', 'file', 'url', 'stdin']},
+        'source':    {'description': 'Resolve to the latest session for a source (mic|file|url|stdin). Ignored if tenant_id is given. Unknown values return HTTP 400.', 'type': 'string', 'enum': ['mic', 'file', 'url', 'stdin', 'youtube']},
         'sentences': {'description': 'Merge and split transcripts into sentences', 'type': 'boolean', 'default': False},
         'until': {'description': 'End chunk ID (defaults to "now" in ms)', 'type': 'string'}
     })
@@ -796,7 +797,7 @@ class PopLatestTranscript(Resource):
 
     @api.doc(params={
         'tenant_id': {'description': 'Tenant ID', 'default': '0000'},
-        'source':    {'description': 'Resolve to the latest session for a source.', 'type': 'string', 'enum': ['mic', 'file', 'url', 'stdin']},
+        'source':    {'description': 'Resolve to the latest session for a source.', 'type': 'string', 'enum': ['mic', 'file', 'url', 'stdin', 'youtube']},
         'sentences': {'description': 'Merge and split transcripts into sentences', 'type': 'boolean', 'default': False},
         'until': {'description': 'End chunk ID (defaults to "now" in ms)', 'type': 'string'}
     })
@@ -840,7 +841,7 @@ class PopLatestTranscript(Resource):
 class DeleteTranscript(Resource):
     @api.doc(params={
         'tenant_id': {'description': 'Tenant ID', 'default': '0000'},
-        'source':    {'description': 'Resolve to the latest session for a source (mic|file|url|stdin). Ignored if tenant_id is given. Unknown values return HTTP 400.', 'type': 'string', 'enum': ['mic', 'file', 'url', 'stdin']},
+        'source':    {'description': 'Resolve to the latest session for a source (mic|file|url|stdin). Ignored if tenant_id is given. Unknown values return HTTP 400.', 'type': 'string', 'enum': ['mic', 'file', 'url', 'stdin', 'youtube']},
         'chunk_id' : {'description': 'Chunk ID', 'type': 'string'}
     })
     @api.response(200, 'Success', transcript_response_model)
@@ -855,7 +856,7 @@ class DeleteTranscript(Resource):
 
     @api.doc(params={
         'tenant_id': {'description': 'Tenant ID', 'default': '0000'},
-        'source':    {'description': 'Resolve to the latest session for a source.', 'type': 'string', 'enum': ['mic', 'file', 'url', 'stdin']},
+        'source':    {'description': 'Resolve to the latest session for a source.', 'type': 'string', 'enum': ['mic', 'file', 'url', 'stdin', 'youtube']},
         'chunk_id' : {'description': 'Chunk ID', 'type': 'string'}
     })
     @api.response(200, 'Success', transcript_response_model)
@@ -883,7 +884,7 @@ class DeleteTranscript(Resource):
 class ListTranscripts(Resource):
     @api.doc(params={
         'tenant_id': {'description': 'Tenant ID', 'default': '0000'},
-        'source':    {'description': 'Resolve to the latest session for a source (mic|file|url|stdin). Ignored if tenant_id is given. Unknown values return HTTP 400.', 'type': 'string', 'enum': ['mic', 'file', 'url', 'stdin']},
+        'source':    {'description': 'Resolve to the latest session for a source (mic|file|url|stdin). Ignored if tenant_id is given. Unknown values return HTTP 400.', 'type': 'string', 'enum': ['mic', 'file', 'url', 'stdin', 'youtube']},
         'sentences': {'description': 'Merge and split transcripts into sentences', 'type': 'boolean', 'default': False},
         'from'     : {'description': 'Starting chunk ID', 'type': 'string', 'default': '0'},
         'until'    : {'description': 'End chunk ID (defaults to "now" in ms)', 'type': 'string'}
@@ -908,7 +909,7 @@ class ListTranscripts(Resource):
 class TranscriptsSize(Resource):
     @api.doc(params={
         'tenant_id': {'description': 'Tenant ID', 'default': '0000'},
-        'source':    {'description': 'Resolve to the latest session for a source (mic|file|url|stdin). Ignored if tenant_id is given. Unknown values return HTTP 400.', 'type': 'string', 'enum': ['mic', 'file', 'url', 'stdin']},
+        'source':    {'description': 'Resolve to the latest session for a source (mic|file|url|stdin). Ignored if tenant_id is given. Unknown values return HTTP 400.', 'type': 'string', 'enum': ['mic', 'file', 'url', 'stdin', 'youtube']},
         'sentences': {'description': 'Merge and split transcripts into sentences', 'type': 'boolean', 'default': False},
         'from'     : {'description': 'Starting chunk ID', 'type': 'string', 'default': '0'},
         'until'    : {'description': 'End chunk ID (defaults to "now" in ms)', 'type': 'string'}
