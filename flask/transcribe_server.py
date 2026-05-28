@@ -20,6 +20,13 @@ from dotenv import load_dotenv
 # (and test runs) that delegate to a remote whisper.cpp server, where those
 # heavy deps are not installed.
 
+
+
+#providers.registry contains the ProviderRegistry class and the global registry of providers
+from providers.registry import ProviderRegistry
+
+
+
 # Load environment variables from .env file
 load_dotenv()
 
@@ -119,6 +126,12 @@ else:
 # ---------------------------------------------------------------------------
 # Shared in-memory state
 # ---------------------------------------------------------------------------
+# right now is designed for simplicity and low operational overhead, 
+# not for massive scale or multi-instance deployments, so we keep all state in-memory
+# future we can migrate to a more robust storage layer (e.g. Redis) if needed,
+# but the current design is sufficient for our use case and keeps the architecture simple
+registry = ProviderRegistry()
+
 
 # transcripts:  tenant_id -> { chunk_id -> {'transcript': str} }
 transcriptd = {}
@@ -503,6 +516,20 @@ def merge_and_split_transcripts(transcripts):
 # Swagger / flask-restx models
 # ---------------------------------------------------------------------------
 
+# this model is used for the /configure endpoint, which allows clients to set up 
+# their preferred translation provider and its configuration for their session
+
+configure_input_model = api.model('ConfigureRequest', {
+    'tenant_id': fields.String(required=True, description='Tenant ID for the session'),
+    'provider_name': fields.String(required=True, description='Canonical name of the provider (deepl, whisper, openai)'),
+    'config': fields.Raw(required=False, description='Dictionary of provider-specific settings (api_key, model_size)')
+})
+
+configure_response_model = api.model('ConfigureResponse', {
+    'status': fields.String(description='Success or error status'),
+    'message': fields.String(description='Status details')
+})
+
 # NOTE: api.model() registrations must use unique names. The original code
 # used 'Transcript' for both the /transcribe ack and the transcript-payload
 # schema, which made flask-restx silently overwrite the first registration
@@ -545,6 +572,54 @@ session_response_model = api.model('SessionResponse', {
     'source': fields.String(description='Source name this session is registered under'),
 })
 
+
+@api.route('/api/v1/translate/configure')
+class ConfigureProvider(Resource):
+    @api.expect(configure_input_model)
+    @api.response(200, 'Success', configure_response_model)
+    @api.response(400, 'Validation Error')
+    def post(self):
+        '''
+        Configure a translation or transcription provider for a specific tenant session.
+        This isolates provider settings per organizer
+        '''
+        try:
+            data = request.get_json(force=True, silent=True)
+            if not data:
+                return {"status": "error", "message": "No JSON payload received"}, 400
+            
+            tenant_id = data.get("tenant_id")
+            provider_name = data.get("provider_name")
+            config_dict = data.get("config") or {}
+
+            if not tenant_id or not provider_name:
+                return {"status": "error", "message": "Missing required fields: tenant_id and provider_name"}, 400
+            
+            # Extract api_key explicitly, pass the rest dynamically as kwargs
+            api_key = config_dict.pop("api_key", None)
+
+            # Feed it into the registry lock
+            registry.configure(
+                tenant_id=tenant_id,
+                provider_name=provider_name,
+                api_key=api_key,
+                **config_dict
+            )
+            
+           
+            logger.info(f"Locked config for '{tenant_id}' Provider: '{provider_name}' Settings caught: {config_dict}")
+
+            return {
+                "status": "success", 
+                "message": f"Configured '{provider_name}' for tenant '{tenant_id}'"
+            }, 200
+
+        except ValueError as e:
+            # Catches strict base validation errors from the registry
+            return {"status": "error", "message": str(e)}, 400
+        except Exception as e:
+            logger.error("Error in /configure", exc_info=True)
+            return {"status": "error", "message": "Internal server error"}, 500       
 
 @api.route('/session')
 class Session(Resource):
