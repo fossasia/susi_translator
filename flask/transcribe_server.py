@@ -15,15 +15,15 @@ import io
 import os
 from dotenv import load_dotenv
 
-# torch and whisper are imported lazily below — only when we actually need
+# torch and whisper are imported lazily below only when we actually need
 # to load local models. This keeps the module importable in environments
 # (and test runs) that delegate to a remote whisper.cpp server, where those
-# heavy deps are not installed.
-
+# heavy deps are not installed
 
 
 #providers.registry contains the ProviderRegistry class and the global registry of providers
 from providers.registry import ProviderRegistry
+from providers.base import TranscriptionProvider, TranslationProvider
 
 
 
@@ -33,6 +33,7 @@ load_dotenv()
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s %(levelname)s: %(message)s')
 logger = logging.getLogger(__name__)
 
+import providers.plugins
 
 # ---------------------------------------------------------------------------
 # Helpers for env-var parsing
@@ -69,61 +70,6 @@ logger.info(f"CORS allowed origins: {_cors_origins}")
 
 
 # ---------------------------------------------------------------------------
-# Whisper backend configuration
-# ---------------------------------------------------------------------------
-
-# We either use a local in-code model or access a whisper.cpp server.
-use_whisper_server = _env_bool('WHISPER_SERVER_USE', False)
-
-# Two distinct env vars so a power user can pick a fast model for high load
-# and a smart model for low load without collapsing them onto one variable.
-# Backwards compat: if the legacy single WHISPER_MODEL is set, it is used as
-# the default for both unless the more specific variables are also set.
-_legacy_model = os.getenv('WHISPER_MODEL')
-model_fast_name = os.getenv('WHISPER_MODEL_FAST', _legacy_model or 'small')    # 244M
-model_smart_name = os.getenv('WHISPER_MODEL_SMART', _legacy_model or 'medium')  # 769M
-
-# Detect hardware compatibility. We only need torch when loading local
-# models, so device detection is deferred to the lazy-import branch below.
-device = None
-
-# Whisper.cpp server URL. We expose the BASE URL in env (no path), and append
-# the endpoint path (e.g. /inference) at call time.
-whisper_server = os.getenv('WHISPER_SERVER', 'http://localhost:8007').rstrip('/')
-
-# Models are only loaded when we are NOT using the whisper.cpp server.
-model_fast = None
-model_smart = None
-
-if use_whisper_server:
-    logger.info(f"Whisper backend: server at {whisper_server}/inference")
-else:
-    # Lazy imports: torch and whisper are heavyweight optional deps. Only
-    # import them when we actually need to load a local model.
-    import torch  # noqa: WPS433  (deferred import is intentional)
-    import whisper  # noqa: WPS433  (deferred import is intentional)
-
-    device = os.getenv('WHISPER_DEVICE', 'cuda' if torch.cuda.is_available() else 'cpu')
-    logger.info(f"Hardware detection: using {device}")
-
-    # Download (or load) two whisper models. If the download via the whisper
-    # library is not possible (offline / firewalled), prefer locally stored
-    # models from <script_dir>/models/<name>.pt.
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    models_path = os.path.join(script_dir, 'models')
-
-    def _load_whisper_model(name: str):
-        local_pt = os.path.join(models_path, name + ".pt")
-        if os.path.exists(local_pt):
-            return whisper.load_model(name, device=device, in_memory=True, download_root=models_path)
-        return whisper.load_model(name, device=device, in_memory=True)
-
-    logger.info(f"Whisper backend: local models fast={model_fast_name}, smart={model_smart_name}")
-    model_fast = _load_whisper_model(model_fast_name)
-    model_smart = _load_whisper_model(model_smart_name)
-
-
-# ---------------------------------------------------------------------------
 # Shared in-memory state
 # ---------------------------------------------------------------------------
 # right now is designed for simplicity and low operational overhead, 
@@ -151,8 +97,8 @@ audio_stack = queue.Queue()
 # tenant_id for that source, so the user never has to type or remember the
 # uuid in curl commands. Stale sessions (older than SESSION_TTL_SECONDS)
 # are evicted on resolve.
-VALID_SOURCES = {"mic", "file", "url", "stdin"}
-latest_session_by_source = {s: None for s in VALID_SOURCES}  # source -> (tenant_id, created_ts) or None
+VALID_SOURCES = {"mic", "file", "url", "stdin","youtube"}
+latest_session_by_source = {s: None for s in VALID_SOURCES}  
 session_lock = threading.Lock()
 
 # How long a per-source "latest session" pointer remains valid without
@@ -263,36 +209,6 @@ def _resolve_tenant(args, default='0000'):
             return tenant_id
     return default
 
-
-def _pcm_int16_to_wav_bytes(pcm: np.ndarray, sample_rate: int = 16000) -> bytes:
-    """
-    Wrap a mono 16-bit PCM numpy array in a minimal RIFF/WAV container so it
-    can be POSTed to whisper.cpp's /inference endpoint, which insists on a
-    real audio file (raw PCM bytes will be rejected).
-    """
-    buf = io.BytesIO()
-    with wave.open(buf, 'wb') as wf:
-        wf.setnchannels(1)
-        wf.setsampwidth(2)  # 16-bit
-        wf.setframerate(sample_rate)
-        wf.writeframes(pcm.astype(np.int16, copy=False).tobytes())
-    return buf.getvalue()
-
-
-def _whisper_server_transcribe(audio_int16: np.ndarray) -> dict:
-    """
-    POST a single chunk to whisper.cpp's /inference endpoint and return its
-    JSON-decoded body. Raises requests.RequestException on transport errors.
-    """
-    wav_bytes = _pcm_int16_to_wav_bytes(audio_int16)
-    files = {'file': ('audio.wav', wav_bytes, 'audio/wav')}
-    data = {'response_format': 'json'}
-    inference_url = whisper_server + '/inference'
-    response = requests.post(inference_url, files=files, data=data, timeout=60)
-    response.raise_for_status()
-    return response.json()
-
-
 # ---------------------------------------------------------------------------
 # Audio worker
 # ---------------------------------------------------------------------------
@@ -333,7 +249,7 @@ def process_audio():
         tenant_id, chunk_id, audiob64 = _next_payload()
         logger.debug(f"Queue length: {audio_stack.qsize()}")
         try:
-            # --- Decode + sanity-check the incoming audio ------------------
+            #Decode and sanity-check the incoming audio 
             audio_data = base64.b64decode(audiob64)
             audio_int16 = np.frombuffer(audio_data, dtype=np.int16)
 
@@ -346,30 +262,37 @@ def process_audio():
                 logger.warning(f"NaN values in audio array for chunk_id {chunk_id}")
                 continue
 
-            # --- Run transcription via the configured backend --------------
-            qsize = audio_stack.qsize()
-            if use_whisper_server:
-                # Whisper.cpp server doesn't expose a fast/smart distinction;
-                # send everything to /inference. The server itself decides
-                # how to schedule it.
-                try:
-                    result = _whisper_server_transcribe(audio_int16)
-                except requests.RequestException as exc:
-                    logger.error(f"Whisper server error for chunk_id {chunk_id}: {exc}")
-                    continue
-            else:
-                # Local-model branch: torch was already imported at module
-                # load time when use_whisper_server=False, so this is cheap.
-                import torch  # noqa: WPS433  (already imported above)
-                model = model_fast if qsize > 20 else model_smart
-                audio_tensor = torch.from_numpy(audio_float32)
-                result = model.transcribe(audio_tensor, temperature=0)
+            #run transcriptions via the configured backend
+            try:
+                transcript = registry.transcribe(tenant_id, audio_float32) or ''
+                transcript = transcript.strip()
+                logger.debug(f"Raw transcript for chunk_id {chunk_id}: '{transcript}'")
+            except TypeError as e:
+                logger.error(f"Transcription provider misconfigured for tenant '{tenant_id}': {e}")
+                continue
+            except Exception as e:
+                logger.error(f"Transcription failed for chunk_id {chunk_id}: {e}")
+                continue
 
-            transcript = (result.get('text') or '').strip()
-
-            # --- Validate + store ----------------------------------------
+            #validation of transcripts before storing and translating them
             if is_valid(transcript):
                 logger.info(f"VALID transcript for chunk_id {chunk_id}: {transcript}")
+                
+                translated_text = ""
+                try:
+                    lang_config = registry.get_language_config(tenant_id)
+                    translation_result = registry.translate(
+                        tenant_id=tenant_id,
+                        text=transcript,
+                        source_lang=lang_config["source_lang"],
+                        target_lang=lang_config["target_lang"],
+                    )
+                    if translation_result:
+                        translated_text = translation_result.strip()
+                except Exception as e:
+                    logger.error(f"Translation failed for chunk_id {chunk_id}: {e}")
+
+                #State Storage
                 with transcripts_lock:
                     transcripts = transcriptd.get(tenant_id)
                     if not transcripts:
@@ -378,13 +301,13 @@ def process_audio():
 
                     current_transcript = transcripts.get(chunk_id)
                     if current_transcript:
-                        # Same chunk_id already exists: this audio is the
-                        # client's appended/extended version of the prior
-                        # buffer for the same chunk, so overwrite rather
-                        # than concatenate.
                         current_transcript['transcript'] = transcript
+                        current_transcript['translation'] = translated_text
                     else:
-                        transcripts[chunk_id] = {'transcript': transcript}
+                        transcripts[chunk_id] = {
+                            'transcript': transcript,
+                            'translation': translated_text,
+                        }
             else:
                 logger.warning(f"INVALID transcript for chunk_id {chunk_id}: {transcript}")
 
@@ -521,8 +444,8 @@ def merge_and_split_transcripts(transcripts):
 
 configure_input_model = api.model('ConfigureRequest', {
     'tenant_id': fields.String(required=True, description='Tenant ID for the session'),
-    'provider_name': fields.String(required=True, description='Canonical name of the provider (deepl, whisper, openai)'),
-    'config': fields.Raw(required=False, description='Dictionary of provider-specific settings (api_key, model_size)')
+    'transcription': fields.Raw(required=False, description='Dictionary containing provider_name and config for STT'),
+    'translation': fields.Raw(required=False, description='Dictionary containing provider_name and config for Text Translation')
 })
 
 configure_response_model = api.model('ConfigureResponse', {
@@ -580,8 +503,7 @@ class ConfigureProvider(Resource):
     @api.response(400, 'Validation Error')
     def post(self):
         '''
-        Configure a translation or transcription provider for a specific tenant session.
-        This isolates provider settings per organizer
+        Configure a transcription and/or translation pipeline for a specific tenant session
         '''
         try:
             data = request.get_json(force=True, silent=True)
@@ -589,37 +511,38 @@ class ConfigureProvider(Resource):
                 return {"status": "error", "message": "No JSON payload received"}, 400
             
             tenant_id = data.get("tenant_id")
-            provider_name = data.get("provider_name")
-            config_dict = data.get("config") or {}
+            if not tenant_id:
+                return {"status": "error", "message": "Missing required field: tenant_id"}, 400
 
-            if not tenant_id or not provider_name:
-                return {"status": "error", "message": "Missing required fields: tenant_id and provider_name"}, 400
-            
-            # Extract api_key explicitly, pass the rest dynamically as kwargs
-            api_key = config_dict.pop("api_key", None)
+            transcription_block = data.get("transcription")
+            translation_block = data.get("translation")
 
-            # Feed it into the registry lock
+            if not transcription_block and not translation_block:
+                return {
+                    "status": "error", 
+                    "message": "Must provide at least a 'transcription' or 'translation' payload block."
+                }, 400
+
+            # Feed the nested blocks straight into the upgraded registry
             registry.configure(
                 tenant_id=tenant_id,
-                provider_name=provider_name,
-                api_key=api_key,
-                **config_dict
+                transcription=transcription_block,
+                translation=translation_block
             )
             
-           
-            logger.info(f"Locked config for '{tenant_id}' Provider: '{provider_name}' Settings caught: {config_dict}")
+            logger.info(f"Deployed pipeline configuration for tenant '{tenant_id}'")
 
             return {
                 "status": "success", 
-                "message": f"Configured '{provider_name}' for tenant '{tenant_id}'"
+                "message": f"Pipeline deployed successfully for tenant '{tenant_id},  Models are warming up in the background'"
             }, 200
 
         except ValueError as e:
-            # Catches strict base validation errors from the registry
+            # Catches strict base validation errors from the registry (e.g. unknown provider)
             return {"status": "error", "message": str(e)}, 400
         except Exception as e:
             logger.error("Error in /configure", exc_info=True)
-            return {"status": "error", "message": "Internal server error"}, 500       
+            return {"status": "error", "message": "Internal server error"}, 500      
 
 @api.route('/session')
 class Session(Resource):
