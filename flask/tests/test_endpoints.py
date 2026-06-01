@@ -1,6 +1,11 @@
 from __future__ import annotations
 
 import time
+from unittest.mock import patch
+import pytest
+
+from providers.registry import register_provider
+from tests.test_provider_architecture import DummyTranscriptionProvider, DummyTranslationProvider
 
 
 def _seed(ts, tenant_id: str, items: dict):
@@ -112,3 +117,58 @@ def test_swagger_has_distinct_models(client):
     definitions = spec.get("definitions") or spec.get("components", {}).get("schemas") or {}
     assert "Transcript" in definitions
     assert "TranscribeAck" in definitions
+
+
+#Dynamic Provider Allocation via Flask-RESTX Configure Route
+@pytest.fixture(autouse=True)
+def setup_mock_providers():
+    """Autouse patch to ensure provider registries use light mocks during endpoint checks."""
+    with patch("providers.registry._PROVIDER_FACTORIES", {}) as mock_dict:
+        register_provider("dummy_stt", lambda cfg: DummyTranscriptionProvider(cfg))
+        register_provider("dummy_nmt", lambda cfg: DummyTranslationProvider(cfg))
+        yield mock_dict
+
+
+def test_configure_endpoint_accepts_split_blocks(client) -> None:
+    """Verifies Phase 4 API layout safely registers split transcription/translation configs."""
+    payload = {
+        "tenant_id": "integration_tenant_1",
+        "transcription": {"model": "dummy_stt"},
+        "translation": {"model": "dummy_nmt"}
+    }
+    
+    response = client.post("/api/v1/translate/configure", json=payload)
+    assert response.status_code == 200
+    
+    data = response.get_json()
+    assert data["status"] == "success"
+    assert "Pipeline deployed successfully" in data["message"]
+
+
+def test_configure_endpoint_rejects_missing_tenant_id(client) -> None:
+    """Verifies validation rule: returns 400 when tenant_id block is missing."""
+    payload = {
+        "transcription": {"model": "dummy_stt"},
+        "translation": {"model": "dummy_nmt"}
+    }
+    
+    response = client.post("/api/v1/translate/configure", json=payload)
+    assert response.status_code == 400
+    
+    data = response.get_json()
+    assert data["status"] == "error"
+    assert "Missing required field: tenant_id" in data["message"]
+
+
+def test_configure_endpoint_rejects_empty_blocks(client) -> None:
+    """Verifies schema constraint: returns 400 if both config parameters are empty."""
+    payload = {
+        "tenant_id": "empty_pipeline_tenant"
+    }
+    
+    response = client.post("/api/v1/translate/configure", json=payload)
+    assert response.status_code == 400
+    
+    data = response.get_json()
+    assert data["status"] == "error"
+    assert "Must provide at least a 'transcription' or 'translation'" in data["message"]
