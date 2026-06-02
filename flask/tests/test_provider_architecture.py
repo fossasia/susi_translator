@@ -6,7 +6,7 @@ basic registry functionality for susi_translator.
 from __future__ import annotations
 import pytest
 
-from providers.base import TranslationProvider, TranslationError
+from providers.base import TranslationProvider, TranslationError, ProviderUnavailableError
 from providers.registry import ProviderRegistry
 
 #concrete providers
@@ -87,6 +87,13 @@ class TestBasicRegistry:
         
         assert retrieved is provider
 
+    def test_duplicate_registration_raises_error(self):
+        registry = ProviderRegistry()
+        registry.register(EchoProvider())
+
+        with pytest.raises(ValueError, match="already registered"):
+            registry.register(EchoProvider())  
+
     def test_unregistered_provider_raises_error(self):
         registry = ProviderRegistry()
         with pytest.raises(ValueError, match="is not registered"):
@@ -102,9 +109,8 @@ class TestBasicRegistry:
     def test_translate_checks_availability(self):
         registry = ProviderRegistry()
         registry.register(UnavailableProvider())
-        
-        # It should check `is_available()` and throw an error before trying to translate
-        with pytest.raises(RuntimeError, match="currently unavailable"):
+
+        with pytest.raises(ProviderUnavailableError, match="currently unavailable"):
             registry.translate("unavailable", "hello", "en", "es")
 
     def test_translate_forwards_kwargs(self):

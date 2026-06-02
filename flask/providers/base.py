@@ -20,6 +20,11 @@ class ProviderConfigError(Exception):
     """Raised when a provider is initialized with missing or malformed configuration"""
 
 
+class ProviderUnavailableError(TranslationError):
+    """Raised when a provider is registered but currently unavailable"""
+    pass
+
+
 class TranslationProvider(ABC):
     """
     Abstract base class for all translation and LLM providers.

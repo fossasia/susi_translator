@@ -8,7 +8,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict
 
-from .base import TranslationProvider, TranslationError
+from .base import TranslationProvider, TranslationError , ProviderUnavailableError
 
 logger = logging.getLogger(__name__)
 
@@ -24,8 +24,10 @@ class ProviderRegistry:
         """
         Registers an already-instantiated translation provider
         """
+        if provider.provider_name in self._providers:
+            raise ValueError(f"Provider '{provider.provider_name}' is already registered")
         self._providers[provider.provider_name] = provider
-        logger.info(f"Registered translation provider: {provider.provider_name}")
+        logger.info(f"Registered provider: {provider.provider_name}")
 
     def get_provider(self, provider_name: str) -> TranslationProvider:
         """
@@ -49,7 +51,9 @@ class ProviderRegistry:
         provider = self.get_provider(provider_name)
         
         if not provider.is_available():
-            raise RuntimeError(f"Provider '{provider_name}' is currently unavailable.")
+            raise ProviderUnavailableError(
+            f"Provider '{provider_name}' is currently unavailable"
+        )
             
         # Pass the extra kwargs down to support provider-specific settings
         return provider.translate(text, source_lang, target_lang, **kwargs)
