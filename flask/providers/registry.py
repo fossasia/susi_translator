@@ -37,7 +37,6 @@ class ProviderRegistry:
     to minimize startup time and memory footprint.
     """
     def __init__(self):
-        # Maps provider_name -> { "config": dict, "instance": Optional[TranslationProvider] }
         self._providers: Dict[str, Dict[str, Any]] = {}
         self._lock = threading.Lock()
 
@@ -47,24 +46,21 @@ class ProviderRegistry:
         api_key: Optional[str] = None,
         **kwargs: Any,
     ) -> None:
-        """
-        Configure a provider's settings before instantiation.
-        """
         if provider_name not in _PROVIDER_FACTORIES:
             raise ValueError(
                 f"Unknown provider '{provider_name}'. "
                 f"Available: {available_providers()}"
             )
 
-        # Bundle the config as expected by base.py
         config_dict = {"api_key": api_key, **kwargs}
-        
+
         with self._lock:
             self._providers[provider_name] = {
                 "config": config_dict,
-                "instance": None,  # Instantiated lazily on first use
+                "factory": _PROVIDER_FACTORIES[provider_name],
+                "instance": None,
             }
-            
+
         logger.info(f"Configured lazy provider '{provider_name}'")
 
     def translate(
@@ -88,7 +84,7 @@ class ProviderRegistry:
             with self._lock:
                 # Check again inside the lock to prevent a race condition
                 if entry["instance"] is None:
-                    factory = _PROVIDER_FACTORIES[provider_name]
+                    factory = entry["factory"]
                     try:
                         instance = factory(entry["config"])
                         entry["instance"] = instance
