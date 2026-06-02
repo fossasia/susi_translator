@@ -4,6 +4,7 @@ Translation and LLM provider architecture for susi_translator
 
 from __future__ import annotations
 
+import copy
 import logging
 from abc import ABC, abstractmethod
 from typing import Any, Dict, Optional
@@ -41,8 +42,8 @@ class TranslationProvider(ABC):
         this can include API keys, model paths, or any other settings required 
         for the provider to function.
         """
-        # Create a shallow copy to prevent accidental mutation of the original dict
-        self.config = dict(config) if config else {}
+        # Create a deep copy to prevent accidental mutation of nested config values
+        self.config = copy.deepcopy(config) if config else {}
 
     @abstractmethod
     def translate(
