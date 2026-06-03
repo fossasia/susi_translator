@@ -42,7 +42,6 @@ class ProviderRegistry:
     """
 
     def __init__(self):
-        # tenant_id -> { "provider_name": str, "config": dict, "instance": Optional[TranslationProvider] }
         self._tenants: Dict[str, Dict[str, Any]] = {}
         self._lock = threading.Lock()
 
@@ -57,7 +56,7 @@ class ProviderRegistry:
         Configure a provider for a tenant session.
         """
         if provider_name not in _PROVIDER_FACTORIES:
-            raise ValueError(
+            raise ProviderConfigError(
                 f"Unknown provider '{provider_name}'. "
                 f"Available: {available_providers()}"
             )
@@ -85,17 +84,26 @@ class ProviderRegistry:
         **kwargs: Any
     ) -> Optional[str]:
         """
-        Translate text for a given tenant using their configured provider.
+        Translate text for a given tenant using their configured provider
+        Returns None if the tenant has no configured provider or if the configured
+        provider reports itself as unavailable
         """
-        #Fast, lock-free read to get the tenant entry
+        # Fast, lock-free read to get the tenant entry
         entry = self._tenants.get(tenant_id)
         if entry is None:
             return None  # no translation configured for this tenant
 
-        #Lazy Instantiation with Double-Checked Locking
+        # Lazy Instantiation with Double-Checked Locking
         if entry["instance"] is None:
             with self._lock:
+                # Re-fetch the entry inside the lock to prevent mutating a stale/orphaned dict
+                # if configure() or remove() was called by another thread while we waited
+                entry = self._tenants.get(tenant_id)
                 
+                # If the entry was removed entirely while we waited, abort safely
+                if entry is None:
+                    return None 
+
                 if entry["instance"] is None:
                     provider_name = entry["provider_name"]
                     factory = _PROVIDER_FACTORIES[provider_name]
@@ -106,7 +114,7 @@ class ProviderRegistry:
                         entry["instance"] = instance
                         logger.info(f"Lazily instantiated '{provider_name}' for tenant '{tenant_id}'")
                     except Exception as e:
-                        logger.error(f"Failed to instantiate '{provider_name}': {e}")
+                        logger.exception(f"Failed to instantiate '{provider_name}': {e}")
                         raise ProviderConfigError(f"Provider initialization failed: {e}")
 
         provider: TranslationProvider = entry["instance"]
