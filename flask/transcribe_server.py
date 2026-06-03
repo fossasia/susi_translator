@@ -585,12 +585,18 @@ class ConfigureProvider(Resource):
         '''
         try:
             data = request.get_json(force=True, silent=True)
-            if not data:
-                return {"status": "error", "message": "No JSON payload received"}, 400
+
+            if data is None:
+                return {"status": "error", "message": "Invalid or missing JSON payload"}, 400
             
             tenant_id = data.get("tenant_id")
             provider_name = data.get("provider_name")
-            config_dict = data.get("config") or {}
+            config_dict = data.get("config")
+
+            if config_dict is None:
+                config_dict = {}
+            elif not isinstance(config_dict, dict):
+                return {"status": "error", "message": "'config' field must be a JSON object"}, 400
 
             if not tenant_id or not provider_name:
                 return {"status": "error", "message": "Missing required fields: tenant_id and provider_name"}, 400
@@ -606,8 +612,12 @@ class ConfigureProvider(Resource):
                 **config_dict
             )
             
-           
-            logger.info(f"Locked config for '{tenant_id}' Provider: '{provider_name}' Settings caught: {config_dict}")
+            logger.info(
+                "Locked config for tenant=%r provider=%r config_keys=%s",
+                tenant_id,
+                provider_name,
+                sorted(config_dict.keys()),
+            )
 
             return {
                 "status": "success", 
