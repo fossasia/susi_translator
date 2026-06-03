@@ -90,7 +90,7 @@ class ProviderRegistry:
                         entry["instance"] = instance
                         logger.info(f"Lazily instantiated '{provider_name}'")
                     except Exception as e:
-                        logger.error(f"Failed to instantiate '{provider_name}': {e}")
+                        logger.exception(f"Failed to instantiate '{provider_name}': {e}")
                         raise ProviderConfigError(f"Provider initialization failed: {e}")
 
         provider: TranslationProvider = entry["instance"]

@@ -216,7 +216,8 @@ class TestThreadSafety:
             t.join()
 
         assert errors == [], f"Unexpected errors: {errors}"
+        assert len(results) == 20
         assert all(r == "hello" for r in results)
         
-        # PROOF: Even with 20 threads colliding, the model was only loaded into RAM exactly once.
+        #Even with 20 threads colliding, the model was only loaded into RAM exactly once
         assert EchoProvider.instantiation_count == 1
