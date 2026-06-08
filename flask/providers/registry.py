@@ -105,3 +105,10 @@ class ProviderRegistry:
             raise RuntimeError(f"Provider '{provider_name}' is currently unavailable.")
 
         return provider.translate(text, source_lang, target_lang, **kwargs)
+    
+    def remove(self, tenant_id: str) -> None:
+        """Completely evict all provider instances and credentials for a tenant session."""
+        with self._lock:
+            removed = self._tenants.pop(tenant_id, None)
+            if removed:
+                logger.info(f"Evicted provider memory for tenant '{tenant_id}'")
