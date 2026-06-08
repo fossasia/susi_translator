@@ -20,6 +20,9 @@ from dotenv import load_dotenv
 # (and test runs) that delegate to a remote whisper.cpp server, where those
 # heavy deps are not installed.
 
+
+from providers.registry import ProviderRegistry
+
 # Load environment variables from .env file
 load_dotenv()
 
@@ -120,6 +123,8 @@ else:
 # Shared in-memory state
 # ---------------------------------------------------------------------------
 
+registry = ProviderRegistry()
+
 # transcripts:  tenant_id -> { chunk_id -> {'transcript': str} }
 transcriptd = {}
 # Single shared lock guarding ALL reads and writes to transcriptd. Must NEVER
@@ -138,7 +143,7 @@ audio_stack = queue.Queue()
 # tenant_id for that source, so the user never has to type or remember the
 # uuid in curl commands. Stale sessions (older than SESSION_TTL_SECONDS)
 # are evicted on resolve.
-VALID_SOURCES = {"mic", "file", "url", "stdin"}
+VALID_SOURCES = {"mic", "file", "url", "stdin", "youtube"}
 latest_session_by_source = {s: None for s in VALID_SOURCES}  # source -> (tenant_id, created_ts) or None
 session_lock = threading.Lock()
 
@@ -503,6 +508,17 @@ def merge_and_split_transcripts(transcripts):
 # Swagger / flask-restx models
 # ---------------------------------------------------------------------------
 
+configure_input_model = api.model('ConfigureRequest', {
+    'tenant_id': fields.String(required=True, description='Tenant ID for the session'),
+    'provider_name': fields.String(required=True, description='Canonical name of the provider (deepl, whisper, openai)'),
+    'config': fields.Raw(required=False, description='Dictionary of provider-specific settings (api_key, model_size)')
+})
+
+configure_response_model = api.model('ConfigureResponse', {
+    'status': fields.String(description='Success or error status'),
+    'message': fields.String(description='Status details')
+})
+
 # NOTE: api.model() registrations must use unique names. The original code
 # used 'Transcript' for both the /transcribe ack and the transcript-payload
 # schema, which made flask-restx silently overwrite the first registration
@@ -544,6 +560,37 @@ session_response_model = api.model('SessionResponse', {
     'tenant_id': fields.String(description='Server-minted tenant ID for this run'),
     'source': fields.String(description='Source name this session is registered under'),
 })
+
+
+
+@app.route('/api/v1/translate/configure', methods=['POST'])
+def configure_provider():
+    data = request.get_json(silent=True) or {}
+    
+    # Extract tenant_id for isolation
+    tenant_id = data.get("tenant_id")
+    if not tenant_id:
+        return jsonify({"status": "error", "message": "Missing 'tenant_id'"}), 400
+    
+    provider_name = data.get("provider_name")
+    if not provider_name:
+        return jsonify({"status": "error", "message": "Missing 'provider_name'"}), 400
+        
+    # Extract extra config variables, excluding the routing keys
+    config_kwargs = {k: v for k, v in data.items() if k not in ("provider_name", "tenant_id")}
+    
+    try:
+        # Pass tenant_id down to the registry
+        registry.configure(tenant_id=tenant_id, provider_name=provider_name, **config_kwargs)
+        return jsonify({
+            "status": "success",
+            "message": f"Provider '{provider_name}' configured successfully for tenant '{tenant_id}'."
+        }), 200
+    except ValueError as e:
+        return jsonify({"status": "error", "message": str(e)}), 400
+    except Exception as e:
+        return jsonify({"status": "error", "message": f"Configuration failed: {str(e)}"}), 500
+    
 
 
 @api.route('/session')
