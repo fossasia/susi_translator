@@ -420,9 +420,9 @@ def merge_and_split_transcripts(transcripts):
     return result
 
 
-# ---------------------------------------------------------------------------
-# Swagger / flask-restx models
-# ---------------------------------------------------------------------------
+
+#flask-restx models
+
 
 configure_input_model = api.model('ConfigureRequest', {
     'tenant_id': fields.String(required=True, description='Tenant ID for the session'),
@@ -443,10 +443,7 @@ configure_response_model = api.model('ConfigureResponse', {
     'message': fields.String(description='Status details')
 })
 
-# NOTE: api.model() registrations must use unique names. The original code
-# used 'Transcript' for both the /transcribe ack and the transcript-payload
-# schema, which made flask-restx silently overwrite the first registration
-# and produce a wrong Swagger doc for /transcribe.
+
 transcribe_input_model = api.model('Transcribe', {
     'audio_b64': fields.String(required=True, description='Base64 encoded audio data'),
     'chunk_id': fields.String(required=True, description='ID of the audio chunk'),
@@ -499,19 +496,6 @@ def configure_provider():
     if not provider_name:
         return jsonify({"status": "error", "message": "Missing 'provider_name'"}), 400
 
-    # Build config_kwargs supporting two payload shapes:
-    #
-    # 1. Nested (Swagger-documented) format:
-    #      {"tenant_id": "...", "provider_name": "...", "config": {"api_key": "..."}}
-    #    The "config" value must be a dict; a non-dict value is rejected with 400.
-    #
-    # 2. Flat (legacy) format:
-    #      {"tenant_id": "...", "provider_name": "...", "api_key": "..."}
-    #    All top-level keys other than the routing keys are passed as-is.
-    #
-    # If both "config" and extra top-level keys are present, the nested dict
-    # takes precedence and extra top-level keys are ignored, preventing
-    # accidental merging of the two styles.
     raw_config = data.get("config")
     if raw_config is not None:
         if not isinstance(raw_config, dict):

@@ -231,9 +231,6 @@ class TestTenantIsolation:
         config_a = registry._tenants[tenant_a]["config_capturing"]["config"]
         config_b = registry._tenants[tenant_b]["config_capturing"]["config"]
 
-        # Verify the lazily-instantiated provider instances are also distinct
-        # objects — not just that their configs differ. This is the core
-        # memory-isolation guarantee: each tenant has its own provider in memory.
         instance_a = registry._tenants[tenant_a]["config_capturing"]["instance"]
         instance_b = registry._tenants[tenant_b]["config_capturing"]["instance"]
         assert instance_a is not None, "Tenant A provider was never instantiated!"
