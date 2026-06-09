@@ -41,13 +41,25 @@ def _list_transcripts_response(request):
     Shared GET /transcripts list logic for both the REST ListTranscriptsView and the legacy TranscribeView. Returns all transcripts for a tenant_id filtered by the from/until chunk_id range. Optionally merges and splits into sentences if ?sentences=true is passed.
     """
     tenant_id = request.GET.get('tenant_id', '0000')
-    fromid = request.GET.get('from', '0')
-    untilid = request.GET.get('until', str(int(time.time() * 1000)))
-    sentences = request.GET.get('sentences', 'false') == 'true'
+    sentences = request.GET.get('sentences', 'false').lower() == 'true'
+    try:
+        fromid = int(request.GET.get('from', '0'))
+        untilid = int(request.GET.get('until', str(int(time.time() * 1000))))
+    except (TypeError, ValueError):
+        return Response(
+            {"error": "Query parameters 'from' and 'until' must be integers"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
     t = get_transcripts(tenant_id)
     if sentences:
         t = merge_and_split_transcripts(t)
-    transcripts = {k: v for k, v in t.items() if int(fromid) <= int(k) <= int(untilid)}
+    transcripts = {}
+    for k, v in t.items():
+        try:
+            if fromid <= int(k) <= untilid:
+                transcripts[k] = v
+        except (TypeError, ValueError):
+            continue
     return Response({'transcripts': [{'chunk_id': k, 'transcript': v['transcript']} for k, v in transcripts.items()]})
 
 
@@ -57,13 +69,10 @@ def _delete_transcript_response(request, chunk_id=None):
     """
     tenant_id = request.GET.get('tenant_id', '0000')
     chunk_id = _resolve_chunk_id(request, chunk_id)
-    sentences = request.GET.get('sentences', 'false') == 'true'
     t = get_transcripts(tenant_id)
-    if sentences:
-        t = merge_and_split_transcripts(t)
     if chunk_id in t:
         entry = t.pop(chunk_id)
-        return Response({'chunk_id': chunk_id, 'transcript': entry['transcript']})
+        return Response({'chunk_id': chunk_id, 'transcript': entry.get('transcript', '')})
     return Response({'chunk_id': chunk_id, 'transcript': ''})
 
 
