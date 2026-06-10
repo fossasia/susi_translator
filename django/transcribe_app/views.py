@@ -36,11 +36,9 @@ def home(request):
     return HttpResponse("Welcome to the Transcription API!")
 
 
-# These are private because they are shared building blocks, not meant to be called from outside this file.
+# Used by: TranscribeView.get, ListTranscriptsView.get
 def _list_transcripts_response(request):
-    """
-    Shared GET /transcripts list logic for both the REST ListTranscriptsView and the legacy TranscribeView. Returns all transcripts for a tenant_id filtered by the from/until chunk_id range. Optionally merges and splits into sentences if ?sentences=true is passed.
-    """
+    """Return transcripts for a tenant filtered by from/until chunk_id range, optionally merged into sentences."""
     tenant_id = request.GET.get('tenant_id', '0000')
     sentences = request.GET.get('sentences', 'false').lower() == 'true'
     try:
@@ -64,10 +62,9 @@ def _list_transcripts_response(request):
     return Response({'transcripts': [{'chunk_id': k, 'transcript': v['transcript']} for k, v in transcripts.items()]})
 
 
+# Used by: GetTranscriptView.delete, DeleteTranscriptView._delete
 def _delete_transcript_response(request, chunk_id=None):
-    """
-    Shared delete logic for DELETE /transcripts/<chunk_id> and the legacy delete_transcript endpoint.
-    """
+    """Remove and return the transcript for a given chunk_id."""
     tenant_id = request.GET.get('tenant_id', '0000')
     chunk_id = _resolve_chunk_id(request, chunk_id)
     t = get_transcripts(tenant_id)
@@ -77,10 +74,9 @@ def _delete_transcript_response(request, chunk_id=None):
     return Response({'chunk_id': chunk_id, 'transcript': ''})
 
 
+# Used by: _delete_transcript_response, GetTranscriptView.get
 def _resolve_chunk_id(request, chunk_id=None):
-    """
-    Resolve the target chunk_id from either the REST path segment (``/transcripts/<int:chunk_id>``) or the legacy ``?chunk_id=`` query parameter. 
-    """
+    """Resolve chunk_id from the URL path segment or the ?chunk_id query parameter."""
     if chunk_id is None:
         chunk_id = request.GET.get('chunk_id')
     return None if chunk_id is None else str(chunk_id)
@@ -237,7 +233,7 @@ class PopFirstTranscriptView(APIView):
         logger.warning("Deprecated GET pop_first_transcript called; use DELETE /api/transcripts/first.")
         return self._pop_first(request)
 
-    # Private because it's a shared building block, not meant to be called from outside this class.
+    # Used by: PopFirstTranscriptView.delete, PopFirstTranscriptView.get
     def _pop_first(self, request):
         tenant_id = request.GET.get('tenant_id', '0000')
         t = get_transcripts(tenant_id)
@@ -332,7 +328,7 @@ class PopLatestTranscriptView(APIView):
         logger.warning("Deprecated GET pop_latest_transcript called; use DELETE /api/transcripts/latest.")
         return self._pop_latest(request)
 
-    # Private because it's a shared building block, not meant to be called from outside this class.
+    # Used by: PopLatestTranscriptView.delete, PopLatestTranscriptView.get
     def _pop_latest(self, request):
         tenant_id = request.GET.get('tenant_id', '0000')
         untilid = request.GET.get('until', str(int(time.time() * 1000)))
@@ -374,6 +370,7 @@ class DeleteTranscriptView(APIView):
         logger.warning("Deprecated GET delete_transcript called; use DELETE /api/transcripts/{chunk_id}.")
         return self._delete(request, chunk_id)
 
+    # Used by: DeleteTranscriptView.delete, DeleteTranscriptView.get
     def _delete(self, request, chunk_id=None):
         return _delete_transcript_response(request, chunk_id)
 
