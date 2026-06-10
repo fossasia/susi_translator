@@ -93,13 +93,7 @@ export $(grep -v '^#' .env | xargs)
 ### 5. Set Up Django Settings
 Ensure your settings.py file is correctly configured.
 
-- SECRET_KEY: Generate a secret key for your Django project.
-```
-# transcribe_project/settings.py
-SECRET_KEY = 'your-unique-secret-key'
-```
-
-Generate a secret key:
+- SECRET_KEY: Set via the `SECRET_KEY` environment variable. Generate a secure key using:
 ```
 python3 -c 'from django.core.management.utils import get_random_secret_key; print(get_random_secret_key())'
 ```

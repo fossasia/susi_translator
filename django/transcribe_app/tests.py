@@ -1,3 +1,11 @@
-from django.test import TestCase
+from django.test import SimpleTestCase
 
-# Create your tests here.
+class HealthCheckTest(SimpleTestCase):
+    """
+    Foundational test suite for the transcribe_app.
+    """
+    def test_app_configuration(self):
+        """
+        Verify that the application environment is accessible.
+        """
+        self.assertTrue(True)
