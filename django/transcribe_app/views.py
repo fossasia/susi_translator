@@ -36,6 +36,7 @@ def home(request):
     return HttpResponse("Welcome to the Transcription API!")
 
 
+# These are private because they are shared building blocks, not meant to be called from outside this file.
 def _list_transcripts_response(request):
     """
     Shared GET /transcripts list logic for both the REST ListTranscriptsView and the legacy TranscribeView. Returns all transcripts for a tenant_id filtered by the from/until chunk_id range. Optionally merges and splits into sentences if ?sentences=true is passed.
@@ -195,6 +196,20 @@ class GetFirstTranscriptView(APIView):
             first_transcript = t[first_chunk_id]['transcript']
             return Response({'chunk_id': first_chunk_id, 'transcript': first_transcript})
 
+    def delete(self, request):
+        """Retrieve and remove the first transcript (pop)."""
+        tenant_id = request.GET.get('tenant_id', '0000')
+        t = get_transcripts(tenant_id)
+        if len(t) == 0:
+            return Response({'chunk_id': '-1', 'transcript': ''})
+        sentences = request.GET.get('sentences', 'false') == 'true'
+        if sentences: t = merge_and_split_transcripts(t)
+        fromid = request.GET.get('from', '0')
+        sorted_keys = sorted(t.keys())
+        first_chunk_id = next((k for k in sorted_keys if int(k) >= int(fromid)), None)
+        first_transcript = t.pop(first_chunk_id, {}).get('transcript', '')
+        return Response({'chunk_id': first_chunk_id, 'transcript': first_transcript})
+
 @method_decorator(csrf_exempt, name='dispatch')
 class PopFirstTranscriptView(APIView):
     @swagger_auto_schema(
@@ -222,6 +237,7 @@ class PopFirstTranscriptView(APIView):
         logger.warning("Deprecated GET pop_first_transcript called; use DELETE /api/transcripts/first.")
         return self._pop_first(request)
 
+    # Private because it's a shared building block, not meant to be called from outside this class.
     def _pop_first(self, request):
         tenant_id = request.GET.get('tenant_id', '0000')
         t = get_transcripts(tenant_id)
@@ -274,7 +290,21 @@ class GetLatestTranscriptView(APIView):
             # now sort the extracted transcripts by key again, now lowest to highest
             extracted_transcripts = {k: v for k, v in sorted(extracted_transcripts.items())}    
             return Response(extracted_transcripts)
-            
+
+    def delete(self, request):
+        """Retrieve and remove the latest transcript (pop)."""
+        tenant_id = request.GET.get('tenant_id', '0000')
+        untilid = request.GET.get('until', str(int(time.time() * 1000)))
+        sentences = request.GET.get('sentences', 'false') == 'true'
+        t = get_transcripts(tenant_id)
+        if sentences: t = merge_and_split_transcripts(t)
+        sorted_keys = sorted(t.keys(), reverse=True)
+        latest_chunk_id = next((k for k in sorted_keys if int(k) < int(untilid)), None)
+        if latest_chunk_id in t:
+            latest_transcript = t.pop(latest_chunk_id, {}).get('transcript', '')
+            return Response({'chunk_id': latest_chunk_id, 'transcript': latest_transcript})
+        return Response({'chunk_id': '-1', 'transcript': ''})
+
 @method_decorator(csrf_exempt, name='dispatch')
 class PopLatestTranscriptView(APIView):
     @swagger_auto_schema(
@@ -302,6 +332,7 @@ class PopLatestTranscriptView(APIView):
         logger.warning("Deprecated GET pop_latest_transcript called; use DELETE /api/transcripts/latest.")
         return self._pop_latest(request)
 
+    # Private because it's a shared building block, not meant to be called from outside this class.
     def _pop_latest(self, request):
         tenant_id = request.GET.get('tenant_id', '0000')
         untilid = request.GET.get('until', str(int(time.time() * 1000)))

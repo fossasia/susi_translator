@@ -9,8 +9,8 @@ from .views import ServeRootStaticFileView
 urlpatterns = [
     path('api/transcripts', views.TranscribeView.as_view(), name='transcripts'),
     path('api/transcripts/count', views.TranscriptsSizeView.as_view(), name='transcripts_count'),
-    path('api/transcripts/first', views.PopFirstTranscriptView.as_view(), name='transcripts_first'),
-    path('api/transcripts/latest', views.PopLatestTranscriptView.as_view(), name='transcripts_latest'),
+    path('api/transcripts/first', views.GetFirstTranscriptView.as_view(), name='transcripts_first'),
+    path('api/transcripts/latest', views.GetLatestTranscriptView.as_view(), name='transcripts_latest'),
     path('api/transcripts/<int:chunk_id>', views.GetTranscriptView.as_view(), name='transcript_by_id'),
 
     # Deprecated RPC-style aliases (api/ prefixed). Kept for one release so existing clients keep working.
@@ -27,8 +27,8 @@ urlpatterns = [
     # Non-prefixed aliases (for Flask HTML clients compatibility).
     path('transcripts', views.TranscribeView.as_view(), name='transcripts_compat'),
     path('transcripts/count', views.TranscriptsSizeView.as_view(), name='transcripts_count_compat'),
-    path('transcripts/first', views.PopFirstTranscriptView.as_view(), name='transcripts_first_compat'),
-    path('transcripts/latest', views.PopLatestTranscriptView.as_view(), name='transcripts_latest_compat'),
+    path('transcripts/first', views.GetFirstTranscriptView.as_view(), name='transcripts_first_compat'),
+    path('transcripts/latest', views.GetLatestTranscriptView.as_view(), name='transcripts_latest_compat'),
     path('transcripts/<int:chunk_id>', views.GetTranscriptView.as_view(), name='transcript_by_id_compat'),
 
     path('transcribe', views.TranscribeView.as_view(legacy=True), name='transcribe_compat'),
