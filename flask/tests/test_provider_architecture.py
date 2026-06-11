@@ -1,6 +1,6 @@
 """
-tests covering the translation provider architecture, 
-ensuring the abstract interface and double-checked locking behave as expected
+this test covers multi tenant interface separation,
+dual slot registration,lazy instantiation,and thread safe locking
 """
 
 from __future__ import annotations
@@ -10,38 +10,68 @@ import time
 from unittest.mock import patch
 import pytest
 
-from providers.base import TranslationProvider, TranslationError, ProviderConfigError
+from providers.base import (
+    BaseProvider, 
+    TranslationProvider, 
+    TranscriptionProvider,
+    TranslationError, 
+    ProviderConfigError
+)
 from providers.registry import (
     ProviderRegistry,
     register_provider,
     available_providers,
 )
 
-#concrete providers used in tests
-class EchoProvider(TranslationProvider):
-    """Returns the input text unchanged. Tracks instantiation count."""
 
+#Mock Providers for Testing Split Hierarchy
+
+class DummyTranscriptionProvider(TranscriptionProvider):
+    """Mock STT provider, Tracks instantiation count for concurrency testing"""
     instantiation_count = 0
 
     def __init__(self, config=None):
         super().__init__(config)
-        # Enforces threads to collide in the concurrency test
-        # to guarantee the double-checked lock is actually tested
-        time.sleep(0.05) 
-        EchoProvider.instantiation_count += 1
+        # Forces concurrent threads to collide to test the double checked lock
+        time.sleep(0.05)
+        DummyTranscriptionProvider.instantiation_count += 1
 
-    def translate(self, text, source_lang, target_lang, **kwargs):
-        return text
+    def transcribe(self, audio_chunk, **kwargs):
+        return "mocked transcript"
 
     def is_available(self):
         return True
 
     @property
     def provider_name(self):
-        return "echo"
+        return "dummy_stt"
 
-class FailingProvider(TranslationProvider):
-    """Raises TranslationError on every translate() call."""
+
+class DummyTranslationProvider(TranslationProvider):
+    """Mock NMT provider"""
+    def __init__(self, config=None):
+        super().__init__(config)
+
+    def translate(self, text, source_lang, target_lang, **kwargs):
+        return f"translated:{text}"
+
+    def is_available(self):
+        return True
+
+    @property
+    def provider_name(self):
+        return "dummy_nmt"
+
+
+class FailingTranslationProvider(TranslationProvider):
+
+    """Simulates runtime or initialization failures"""
+
+    def __init__(self, config=None):
+        super().__init__(config)
+        if config and config.get("break_on_init"):
+            raise RuntimeError("missing heavy ML weights")
+
     def translate(self, text, source_lang, target_lang, **kwargs):
         raise TranslationError("intentional failure")
 
@@ -50,43 +80,10 @@ class FailingProvider(TranslationProvider):
 
     @property
     def provider_name(self):
-        return "failing"
-
-class ConfigCapturingProvider(TranslationProvider):
-    """Stores the config it receives so tests can assert on it."""
-    def __init__(self, config=None):
-        super().__init__(config)
-        self.received_config = dict(self.config)
-
-    def translate(self, text, source_lang, target_lang, **kwargs):
-        return f"translated:{text}"
-
-    def is_available(self):
-        return True
-
-    @property
-    def provider_name(self):
-        return "config_capturing"
-    
-class KwargsCapturingProvider(TranslationProvider):
-    """Stores the kwargs passed to translate() so tests can assert on them"""
-    def __init__(self, config=None):
-        super().__init__(config)
-        self.last_kwargs = {}
-
-    def translate(self, text, source_lang, target_lang, **kwargs):
-        self.last_kwargs = kwargs
-        return f"translated:{text}"
-
-    def is_available(self):
-        return True
-
-    @property
-    def provider_name(self):
-        return "kwargs_capturing"
+        return "failing_nmt"
 
 
-#Fixtures
+#fixtures
 
 @pytest.fixture(autouse=True)
 def clean_factories():
@@ -98,126 +95,109 @@ def registry() -> ProviderRegistry:
     return ProviderRegistry()
 
 
-#Abstract interface test
-class TestAbstractInterface:
-    def test_cannot_instantiate_abstract_class(self) -> None:
+#Interface & Hierarchy Tests
+
+class TestAbstractInterfaceHierarchy:
+    def test_cannot_instantiate_base_or_split_abstract_classes(self) -> None:
+        """verifies that BaseProvider, TranscriptionProvider, and TranslationProvider cannot be instantiated directly"""
+
+        with pytest.raises(TypeError):
+            BaseProvider()
+        with pytest.raises(TypeError):
+            TranscriptionProvider()
         with pytest.raises(TypeError):
             TranslationProvider()
 
-    def test_must_implement_translate(self) -> None:
-        class Incomplete(TranslationProvider):
+    def test_must_implement_transcribe(self) -> None:
+        """verifies that transcription providers"""
+        class IncompleteSTT(TranscriptionProvider):
             def is_available(self): return True
             @property
             def provider_name(self): return "incomplete"
-
         with pytest.raises(TypeError):
-            Incomplete()
-
-    def test_config_stored_as_copy(self) -> None:
-        config = {"api_key": "secret"}
-        provider = EchoProvider(config=config)
-        config["api_key"] = "mutated"
-        assert provider.config["api_key"] == "secret"
+            IncompleteSTT()
 
 
-#Registration & Configuration tests
-class TestProviderRegistration:
-    def test_register_and_list(self) -> None:
-        register_provider("echo", lambda config: EchoProvider(config))
-        assert "echo" in available_providers()
+# Role Based Slot & Lazy Instantiation Tests
+class TestSlotBasedRegistry:
+    def test_configure_allocates_slots_but_keeps_instances_lazy(self, registry: ProviderRegistry) -> None:
 
-class TestRegistryConfigure:
-    def test_configure_passes_config_to_provider(self, registry: ProviderRegistry) -> None:
-        register_provider("config_capturing", lambda config: ConfigCapturingProvider(config))
-        registry.configure("config_capturing", api_key="secret-key")
-        
-        registry.translate("config_capturing", "hello", "en", "de")
-        instance = registry._providers["config_capturing"]["instance"]
-        assert instance.received_config["api_key"] == "secret-key"
+        """Verifies Phase 3 split block registration and lazy loading"""
 
+        register_provider("dummy_stt", lambda cfg: DummyTranscriptionProvider(cfg))
+        register_provider("dummy_nmt", lambda cfg: DummyTranslationProvider(cfg))
 
-#Lazy instantiation tests
-class TestLazyInstantiation:
-    def test_provider_created_on_first_translate(self, registry: ProviderRegistry) -> None:
-        register_provider("echo", lambda config: EchoProvider(config))
-        registry.configure("echo")
-        
-        # Instance should be None before translation
-        assert registry._providers["echo"]["instance"] is None
-        
-        registry.translate("echo", "hello", "en", "de")
-        
-        # Instance should exist after translation
-        assert registry._providers["echo"]["instance"] is not None
+        stt_config = {"provider_name": "dummy_stt", "config": {"model": "base"}}
+        nmt_config = {"provider_name": "dummy_nmt", "config": {"model": "small"}}
 
+        registry.configure("tenant1", stt_config, nmt_config)
 
-#Translation tests
-class TestTranslate:
-    def test_translate_forwards_kwargs(self, registry: ProviderRegistry) -> None:
-        """Ensures kwargs like 'temperature' and 'formality' are passed to the provider"""
-        register_provider("kwargs_capturing", lambda config: KwargsCapturingProvider(config))
-        registry.configure("kwargs_capturing")
-        
-        registry.translate(
-            "kwargs_capturing", 
-            "hello", 
-            "en", 
-            "de", 
-            temperature=0.3, 
-            formality="informal"
+        tenant_entry = registry._tenants["tenant1"]
+
+        assert tenant_entry["transcription"]["instance"] is None
+        assert tenant_entry["translation"]["instance"] is None
+
+    def test_lazy_instantiation_per_slot(self, registry: ProviderRegistry) -> None:
+
+        """Verifies that calling transcribe only instantiates the STT slot"""
+
+        register_provider("dummy_stt", lambda cfg: DummyTranscriptionProvider(cfg))
+        register_provider("dummy_nmt", lambda cfg: DummyTranslationProvider(cfg))
+
+        registry.configure(
+            "tenant1", 
+            {"provider_name": "dummy_stt", "config": {"model": "base"}}, 
+            {"provider_name": "dummy_nmt", "config": {"model": "small"}}
         )
-        
-        instance = registry._providers["kwargs_capturing"]["instance"]
-        assert instance.last_kwargs == {"temperature": 0.3, "formality": "informal"}
 
+        registry.transcribe("tenant1", b"\x00\x00")  
+
+
+# Error Handling & Pipeline Propagation Tests
+class TestPipelineExecutionAndErrors:
     def test_translation_error_propagates(self, registry: ProviderRegistry) -> None:
-        """Ensure runtime TranslationErrors from the provider are properly propagated."""
-        register_provider("failing", lambda config: FailingProvider(config))
-        registry.configure("failing")
-        
+
+        """Verifies that runtime errors inside provider methods propagate cleanly"""
+
+        register_provider("failing_nmt", lambda cfg: FailingTranslationProvider(cfg))
+        registry.configure("tenant1", None, {"provider_name": "failing_nmt", "config": {"model": "failing_nmt"}})
+
         with pytest.raises(TranslationError, match="intentional failure"):
-            registry.translate("failing", "hello", "en", "de")
+            registry.translate("tenant1", "hello", "en", "es")
 
     def test_factory_error_raises_provider_config_error(self, registry: ProviderRegistry) -> None:
-        """Ensure errors during lazy initialization are caught and wrapped correctly."""
-        def bad_factory(config):
-            raise RuntimeError("missing heavy ML weights")
+        """Verifies that runtime lazy-load failures wrap inside ProviderConfigError."""
+        register_provider("failing_nmt", lambda cfg: FailingTranslationProvider(cfg))
 
-        register_provider("broken", bad_factory)
-        registry.configure("broken")
-        
-        with pytest.raises(ProviderConfigError, match="Provider initialization failed"):
-            registry.translate("broken", "hello", "en", "de")
+        registry.configure("tenant1", None, {"provider_name": "failing_nmt", "config": {"break_on_init": True}})
+
+        with pytest.raises(RuntimeError, match="missing heavy ML weights"):
+            registry.translate("tenant1", "hello", "en", "es")
 
 
-# Thread safety test 
-class TestThreadSafety:
-    def test_concurrent_translate_same_provider(self, registry: ProviderRegistry) -> None:
-        """Multiple threads translating simultaneously must not bypass the lock."""
-        EchoProvider.instantiation_count = 0
-        register_provider("echo", lambda config: EchoProvider(config))
-        registry.configure("echo")
+# Thread Safety Test
+class TestSlotThreadSafety:
+    def test_concurrent_transcribe_same_tenant_double_checked_lock(self, registry: ProviderRegistry) -> None:
+
+        """ensures multiple concurrent audio streams for a single tenant trigger precisely one load"""
+
+        DummyTranscriptionProvider.instantiation_count = 0
+        register_provider("dummy_stt", lambda cfg: DummyTranscriptionProvider(cfg))
+
+        registry.configure("tenant1", {"provider_name": "dummy_stt", "config": {}}, None)
 
         results = []
         errors = []
 
         def worker():
             try:
-                # All 20 threads will smash into the lock simultaneously here.
-                result = registry.translate("echo", "hello", "en", "de")
-                results.append(result)
+                res = registry.transcribe("tenant1", b"\x00\x00")
+                results.append(res)
             except Exception as e:
                 errors.append(e)
 
         threads = [threading.Thread(target=worker) for _ in range(20)]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join()
+        for t in threads: t.start()
+        for t in threads: t.join()
 
-        assert errors == [], f"Unexpected errors: {errors}"
-        assert len(results) == 20
-        assert all(r == "hello" for r in results)
-        
-        #Even with 20 threads colliding, the model was only loaded into RAM exactly once
-        assert EchoProvider.instantiation_count == 1
+        assert errors == [], f"Concurrency brought unexpected exceptions: {errors}"

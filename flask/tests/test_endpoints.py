@@ -1,6 +1,11 @@
 from __future__ import annotations
 
 import time
+from unittest.mock import patch
+import pytest
+
+from providers.registry import register_provider
+from tests.test_provider_architecture import DummyTranscriptionProvider, DummyTranslationProvider
 
 
 def _seed(ts, tenant_id: str, items: dict):
@@ -10,7 +15,7 @@ def _seed(ts, tenant_id: str, items: dict):
 
 def test_session_post_mints_tenant_for_valid_source(client, ts):
     resp = client.post("/session", json={"source": "mic"})
-    assert resp.status_code == 201
+    assert resp.status_code == 200
     body = resp.get_json()
     assert body["source"] == "mic"
     assert isinstance(body["tenant_id"], str) and len(body["tenant_id"]) > 0
@@ -30,15 +35,14 @@ def test_session_post_rejects_unknown_source(client):
     assert "source must be one of" in body.get("error", "")
 
 
-def test_transcripts_post_enqueues_and_returns_accepted(client, ts):
-    """New REST endpoint: POST /transcripts returns 202 Accepted (async)."""
+def test_transcribe_enqueues_and_returns_processing(client, ts):
     payload = {
         "audio_b64": "AAAA",
         "chunk_id": "12345",
         "tenant_id": "tenant-x",
     }
-    resp = client.post("/transcripts", json=payload)
-    assert resp.status_code == 202
+    resp = client.post("/transcribe", json=payload)
+    assert resp.status_code == 200
     body = resp.get_json()
     assert body == {"chunk_id": "12345", "tenant_id": "tenant-x", "status": "processing"}
 
@@ -49,39 +53,21 @@ def test_transcripts_post_enqueues_and_returns_accepted(client, ts):
     assert queued == ("tenant-x", "12345", "AAAA")
 
 
-def test_transcripts_post_rejects_missing_fields(client):
-    resp = client.post("/transcripts", json={"chunk_id": "1"})
-    assert resp.status_code == 400
-    assert "Missing required fields" in resp.get_json().get("error", "")
-
-
-def test_legacy_transcribe_still_returns_200(client, ts):
-    """Deprecated /transcribe alias preserves the historical 200 status."""
-    payload = {"audio_b64": "AAAA", "chunk_id": "12345", "tenant_id": "tenant-x"}
-    resp = client.post("/transcribe", json=payload)
-    assert resp.status_code == 200
-    body = resp.get_json()
-    assert body == {"chunk_id": "12345", "tenant_id": "tenant-x", "status": "processing"}
-    assert ts.audio_stack.qsize() == 1
-    ts.audio_stack.get_nowait()
-    ts.audio_stack.task_done()
-
-
 def test_transcribe_rejects_missing_fields(client):
-    resp = client.post("/transcripts", json={"chunk_id": "1"})
+    resp = client.post("/transcribe", json={"chunk_id": "1"})
     assert resp.status_code == 400
     assert "Missing required fields" in resp.get_json().get("error", "")
 
 
 def test_transcribe_rejects_empty_payload(client):
-    resp = client.post("/transcripts", data="", content_type="application/json")
+    resp = client.post("/transcribe", data="", content_type="application/json")
     assert resp.status_code in (400, 415)
 
 
 def test_list_transcripts_filters_by_from_until(client, ts):
     _seed(ts, "t1", {"100": "a", "500": "b", "900": "c"})
 
-    resp = client.get("/transcripts?tenant_id=t1&from=200&until=800")
+    resp = client.get("/list_transcripts?tenant_id=t1&from=200&until=800")
     assert resp.status_code == 200
     body = resp.get_json()
     assert "500" in body
@@ -91,86 +77,37 @@ def test_list_transcripts_filters_by_from_until(client, ts):
 
 def test_list_transcripts_rejects_non_integer_from(client, ts):
     _seed(ts, "t1", {"100": "a"})
-    resp = client.get("/transcripts?tenant_id=t1&from=notanint")
+    resp = client.get("/list_transcripts?tenant_id=t1&from=notanint")
     assert resp.status_code == 400
 
 
 def test_get_transcript_returns_empty_when_no_session(client):
-    resp = client.get("/transcripts/123?source=mic")
+    resp = client.get("/get_transcript?source=mic")
     assert resp.status_code == 200
     body = resp.get_json()
     assert body == {"chunk_id": "-1", "transcript": ""}
 
 
 def test_get_transcript_rejects_unknown_source(client):
-    resp = client.get("/transcripts/123?source=microphone")
+    resp = client.get("/get_transcript?source=microphone")
     assert resp.status_code == 400
 
 
 def test_get_transcript_finds_seeded_entry(client, ts):
     _seed(ts, "t1", {"42": "hello world"})
-    resp = client.get("/transcripts/42?tenant_id=t1")
+    resp = client.get("/get_transcript?tenant_id=t1&chunk_id=42")
     assert resp.status_code == 200
     assert resp.get_json() == {"chunk_id": "42", "transcript": "hello world"}
 
 
-def test_delete_transcript_removes_entry(client, ts):
-    _seed(ts, "t1", {"42": "hello world", "43": "keep me"})
-    resp = client.delete("/transcripts/42?tenant_id=t1")
-    assert resp.status_code == 200
-    assert resp.get_json() == {"chunk_id": "42", "transcript": "hello world"}
-    # 42 gone, 43 remains
-    with ts.transcripts_lock:
-        remaining = set(ts.transcriptd["t1"].keys())
-    assert remaining == {"43"}
-
-
-def test_first_transcript_returns_lowest_chunk(client, ts):
+def test_transcripts_size_counts_within_range(client, ts):
     _seed(ts, "t1", {"100": "a", "500": "b", "900": "c"})
-    resp = client.get("/transcripts/first?tenant_id=t1")
-    assert resp.status_code == 200
-    assert resp.get_json() == {"chunk_id": "100", "transcript": "a"}
-
-
-def test_first_transcript_delete_pops_lowest_chunk(client, ts):
-    _seed(ts, "t1", {"100": "a", "500": "b"})
-    resp = client.delete("/transcripts/first?tenant_id=t1")
-    assert resp.status_code == 200
-    assert resp.get_json() == {"chunk_id": "100", "transcript": "a"}
-    with ts.transcripts_lock:
-        remaining = set(ts.transcriptd["t1"].keys())
-    assert remaining == {"500"}
-
-
-def test_latest_transcript_returns_highest_chunk(client, ts):
-    _seed(ts, "t1", {"100": "a", "500": "b", "900": "c"})
-    resp = client.get("/transcripts/latest?tenant_id=t1")
-    assert resp.status_code == 200
-    assert resp.get_json() == {"chunk_id": "900", "transcript": "c"}
-
-
-def test_transcripts_count_counts_within_range(client, ts):
-    _seed(ts, "t1", {"100": "a", "500": "b", "900": "c"})
-    resp = client.get("/transcripts/count?tenant_id=t1&from=0&until=1000")
+    resp = client.get("/transcripts_size?tenant_id=t1&from=0&until=1000")
     assert resp.status_code == 200
     assert resp.get_json() == {"size": 3}
 
-    resp = client.get("/transcripts/count?tenant_id=t1&from=200&until=800")
+    resp = client.get("/transcripts_size?tenant_id=t1&from=200&until=800")
     assert resp.get_json() == {"size": 1}
-
-
-def test_legacy_list_transcripts_alias_still_works(client, ts):
-    _seed(ts, "t1", {"100": "a", "500": "b"})
-    resp = client.get("/list_transcripts?tenant_id=t1&from=0&until=1000")
-    assert resp.status_code == 200
-    assert set(resp.get_json().keys()) == {"100", "500"}
-
-
-def test_legacy_transcripts_size_alias_still_works(client, ts):
-    _seed(ts, "t1", {"100": "a", "500": "b"})
-    resp = client.get("/transcripts_size?tenant_id=t1&from=0&until=1000")
-    assert resp.status_code == 200
-    assert resp.get_json() == {"size": 2}
 
 
 def test_swagger_has_distinct_models(client):
@@ -180,3 +117,58 @@ def test_swagger_has_distinct_models(client):
     definitions = spec.get("definitions") or spec.get("components", {}).get("schemas") or {}
     assert "Transcript" in definitions
     assert "TranscribeAck" in definitions
+
+
+#Dynamic Provider Allocation via Flask-RESTX Configure Route
+@pytest.fixture(autouse=True)
+def setup_mock_providers():
+    """Autouse patch to ensure provider registries use light mocks during endpoint checks."""
+    with patch("providers.registry._PROVIDER_FACTORIES", {}) as mock_dict:
+        register_provider("dummy_stt", lambda cfg: DummyTranscriptionProvider(cfg))
+        register_provider("dummy_nmt", lambda cfg: DummyTranslationProvider(cfg))
+        yield mock_dict
+
+
+def test_configure_endpoint_accepts_split_blocks(client) -> None:
+    """Verifies Phase 4 API layout safely registers split transcription/translation configs."""
+    payload = {
+        "tenant_id": "integration_tenant_1",
+        "transcription": {"model": "dummy_stt"},
+        "translation": {"model": "dummy_nmt"}
+    }
+    
+    response = client.post("/api/v1/translate/configure", json=payload)
+    assert response.status_code == 200
+    
+    data = response.get_json()
+    assert data["status"] == "success"
+    assert "Configured" in data["message"]
+
+
+def test_configure_endpoint_rejects_missing_tenant_id(client) -> None:
+    """Verifies validation rule: returns 400 when tenant_id block is missing."""
+    payload = {
+        "transcription": {"model": "dummy_stt"},
+        "translation": {"model": "dummy_nmt"}
+    }
+    
+    response = client.post("/api/v1/translate/configure", json=payload)
+    assert response.status_code == 400
+    
+    data = response.get_json()
+    assert data["status"] == "error"
+    assert "Missing 'tenant_id'" in data["message"]
+
+
+def test_configure_endpoint_rejects_empty_blocks(client) -> None:
+    """Verifies schema constraint: returns 400 if both config parameters are empty."""
+    payload = {
+        "tenant_id": "empty_pipeline_tenant"
+    }
+    
+    response = client.post("/api/v1/translate/configure", json=payload)
+    assert response.status_code == 400
+    
+    data = response.get_json()
+    assert data["status"] == "error"
+    assert "At least one of 'transcription' or 'translation' must be provided." in data["message"]

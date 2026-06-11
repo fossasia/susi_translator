@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, abort
+from flask import Flask, request, jsonify, abort, Response
 from flask_restx import Api, Resource, fields
 from flask_cors import CORS
 from werkzeug.exceptions import HTTPException
@@ -7,7 +7,11 @@ import threading
 import requests
 import logging
 import base64
+import json
 import queue
+import signal
+import subprocess
+import sys
 import time
 import uuid
 import wave
@@ -15,9 +19,18 @@ import io
 import os
 from dotenv import load_dotenv
 
-
+# GLOBAL SSL PATCH for bypassing strict OpenSSL 3.0 EOF checks (fixes yt-dlp & Whisper crashes)
+import ssl
+_orig_wrap_socket = ssl.SSLContext.wrap_socket
+def _wrap_socket_patch(self, *args, **kwargs):
+    self.options |= getattr(ssl, "OP_IGNORE_UNEXPECTED_EOF", 0)
+    self.options |= getattr(ssl, "OP_LEGACY_SERVER_CONNECT", 0x4)
+    return _orig_wrap_socket(self, *args, **kwargs)
+ssl.SSLContext.wrap_socket = _wrap_socket_patch
 
 from providers.registry import ProviderRegistry
+import providers.plugins  # Import to trigger provider registration
+
 
 # Load environment variables from .env file
 load_dotenv()
@@ -40,8 +53,7 @@ app = Flask(__name__)
 api = Api(app, version='1.0', title='Transcription API',
           description='A simple Transcription API', doc='/swagger')
 
-# CORS_ALLOWED_ORIGINS is a comma-separated list. Default is local-dev only.
-# Use "*" explicitly if (and only if) you really want to allow any origin.
+#cors configurtion from .env file
 _cors_origins = _env_csv(
     "CORS_ALLOWED_ORIGINS",
     "http://localhost:5040,http://127.0.0.1:5040",
@@ -49,68 +61,30 @@ _cors_origins = _env_csv(
 CORS(app, resources={r"/*": {"origins": _cors_origins}})
 logger.info(f"CORS allowed origins: {_cors_origins}")
 
-# We either use a local in-code model or access a whisper.cpp server.
-use_whisper_server = _env_bool('WHISPER_SERVER_USE', False)
-_legacy_model = os.getenv('WHISPER_MODEL')
-model_fast_name = os.getenv('WHISPER_MODEL_FAST', _legacy_model or 'small')    # 244M
-model_smart_name = os.getenv('WHISPER_MODEL_SMART', _legacy_model or 'medium')  # 769M
-device = None
-whisper_server = os.getenv('WHISPER_SERVER', 'http://localhost:8007').rstrip('/')
 
-# Models are only loaded when we are NOT using the whisper.cpp server.
-model_fast = None
-model_smart = None
-
-if use_whisper_server:
-    logger.info(f"Whisper backend: server at {whisper_server}/inference")
-else:
-    import torch 
-    import whisper  
-
-    logger.info("TORCH CUDA: %s", torch.cuda.is_available())
-    logger.info("DEVICE COUNT: %s", torch.cuda.device_count())
-    logger.info(f"Hardware detection: using {device}")
-
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    models_path = os.path.join(script_dir, 'models')
-
-    def _load_whisper_model(name: str):
-        local_pt = os.path.join(models_path, name + ".pt")
-        if os.path.exists(local_pt):
-            return whisper.load_model(name, device=device, in_memory=True, download_root=models_path)
-        return whisper.load_model(name, device=device, in_memory=True)
-
-    logger.info(f"Whisper backend: local models fast={model_fast_name}, smart={model_smart_name}")
-    model_fast = _load_whisper_model(model_fast_name)
-    model_smart = _load_whisper_model(model_smart_name)
-
-
-# ---------------------------------------------------------------------------
-# Shared in-memory state
-# ---------------------------------------------------------------------------
-
+#Shared in-memory state
 registry = ProviderRegistry()
 
-# transcripts:  tenant_id -> { chunk_id -> {'transcript': str} }
 transcriptd = {}
 transcripts_lock = threading.Lock()
+
+# Background audio grabber subprocesses, keyed by tenant_id.
+grabber_processes = {}  
+grabber_lock = threading.Lock()
 
 # FIFO queue of pending audio chunks awaiting transcription.
 audio_stack = queue.Queue()
 VALID_SOURCES = {"mic", "file", "url", "stdin", "youtube"}
-latest_session_by_source = {s: None for s in VALID_SOURCES}  # source -> (tenant_id, created_ts) or None
+latest_session_by_source = {s: None for s in VALID_SOURCES} 
 session_lock = threading.Lock()
 SESSION_TTL_SECONDS = int(os.getenv('SESSION_TTL_SECONDS', '7200'))
 
 
-# Small helpers
+#small helper functions
 
 def _parse_int_arg(args, name: str, default: int = None, required: bool = False) -> int:
     """
-    Parse a query-string argument as an int. On invalid input, abort with HTTP
-    400 instead of letting `int()` raise and be turned into a 500.
-
-    Returns ``default`` if the argument is missing and not required.
+    Parses a query-string argument as an int
     """
     raw = args.get(name)
     if raw is None or raw == "":
@@ -125,9 +99,7 @@ def _parse_int_arg(args, name: str, default: int = None, required: bool = False)
 
 def _chunk_id_int(k):
     """
-    Best-effort int() of a chunk_id. Returns ``None`` for keys that cannot
-    be interpreted as integers, so callers can defensively skip them
-    rather than crashing the endpoint with a 500.
+    Returns None for keys that cannot be interpreted as integers
     """
     try:
         return int(k)
@@ -137,9 +109,8 @@ def _chunk_id_int(k):
 
 def _numeric_sorted_keys(transcripts, reverse: bool = False) -> list:
     """
-    Return the chunk_ids of ``transcripts`` sorted numerically, skipping
-    any that can't be parsed as ints. Used by every endpoint that does
-    "first" / "latest" / range-filtered lookups.
+    Return the chunk_ids of transcripts sorted numerically, skipping
+    any that can't be parsed as ints
     """
     pairs = []
     for k in transcripts.keys():
@@ -158,17 +129,7 @@ def _in_chunk_range(k, fromid: int, untilid: int) -> bool:
 
 def _resolve_tenant(args, default='0000'):
     """
-    Resolve which tenant_id a read request is targeting.
-
-    Priority:
-      1. Explicit ?tenant_id=<id> wins (covers manual override / debugging).
-      2. ?source=<mic|file|url|stdin|youtube> resolves to the most recently
-         registered, non-expired session for that source. An unknown
-         source value aborts with HTTP 400 so client typos surface
-         loudly instead of masquerading as "no transcripts yet". A known
-         source with no active session returns None so the caller can
-         short-circuit with an empty response.
-      3. Fall back to ``default`` (legacy behaviour).
+    Resolve which tenant_id a read request is targeting
     """
     explicit = args.get('tenant_id')
     if explicit:
@@ -195,39 +156,10 @@ def _resolve_tenant(args, default='0000'):
     return default
 
 
-def _pcm_int16_to_wav_bytes(pcm: np.ndarray, sample_rate: int = 16000) -> bytes:
-    """
-    Wrap a mono 16-bit PCM numpy array in a minimal RIFF/WAV container so it
-    can be POSTed to whisper.cpp's /inference endpoint, which insists on a
-    real audio file (raw PCM bytes will be rejected).
-    """
-    buf = io.BytesIO()
-    with wave.open(buf, 'wb') as wf:
-        wf.setnchannels(1)
-        wf.setsampwidth(2)  # 16-bit
-        wf.setframerate(sample_rate)
-        wf.writeframes(pcm.astype(np.int16, copy=False).tobytes())
-    return buf.getvalue()
-
-
-def _whisper_server_transcribe(audio_int16: np.ndarray) -> dict:
-    """
-    POST a single chunk to whisper.cpp's /inference endpoint and return its
-    JSON-decoded body. Raises requests.RequestException on transport errors.
-    """
-    wav_bytes = _pcm_int16_to_wav_bytes(audio_int16)
-    files = {'file': ('audio.wav', wav_bytes, 'audio/wav')}
-    data = {'response_format': 'json'}
-    inference_url = whisper_server + '/inference'
-    response = requests.post(inference_url, files=files, data=data, timeout=60)
-    response.raise_for_status()
-    return response.json()
-
 def _next_payload():
     """
-    Pull the next audio payload from ``audio_stack``, dropping any superseded
+    Pull the next audio payload from audio stack, dropping any superseded
     duplicates so we only transcribe the latest version of each
-    (tenant_id, chunk_id).
     """
     tenant_id, chunk_id, audiob64 = audio_stack.get()
     while True:
@@ -238,8 +170,7 @@ def _next_payload():
             )
         if not has_newer:
             return tenant_id, chunk_id, audiob64
-        # Current entry is stale; discard it (correctly accounted) and grab
-        # the next one from the head.
+        
         audio_stack.task_done()
         tenant_id, chunk_id, audiob64 = audio_stack.get()
 
@@ -261,25 +192,10 @@ def process_audio():
                 logger.warning(f"NaN values in audio array for chunk_id {chunk_id}")
                 continue
 
-            qsize = audio_stack.qsize()
-            if use_whisper_server:
-                # Whisper.cpp server doesn't expose a fast/smart distinction;
-                # send everything to /inference. The server itself decides
-                # how to schedule it.
-                try:
-                    result = _whisper_server_transcribe(audio_int16)
-                except requests.RequestException as exc:
-                    logger.error(f"Whisper server error for chunk_id {chunk_id}: {exc}")
-                    continue
-            else:
-                # Local-model branch: torch was already imported at module
-                # load time when use_whisper_server=False, so this is cheap.
-                import torch 
-                model = model_fast if qsize > 20 else model_smart
-                audio_tensor = torch.from_numpy(audio_float32)
-                result = model.transcribe(audio_tensor, temperature=0)
-
-            transcript = (result.get('text') or '').strip()
+            transcript = registry.transcribe(tenant_id, audio_float32)
+            if transcript is None:
+                logger.warning(f"Transcription provider unavailable for chunk_id {chunk_id}")
+                continue
 
             if is_valid(transcript):
                 logger.info(f"VALID transcript for chunk_id {chunk_id}: {transcript}")
@@ -307,16 +223,16 @@ def process_audio():
             audio_stack.task_done()
 
 
-# Check if the transcript is valid: Contains at least one ASCII character and no forbidden words
 def is_valid(transcript):
+    """Check if the transcript is valids, contains at least one ASCII character and no forbidden words."""
     transcript_lower = transcript.lower()
     # Check for at least one ASCII character with a code < 128 and code > 32 (we omit space in this case)
     has_ascii_char = any(32 < ord(char) < 128 for char in transcript)
 
     # Check for forbidden words (case insensitive)
-    forbidden_phrases = {"thank you", "bye!", "thanks for watching", "click, click", "click click", "cough cough", "뉴", "스", "김", "수", "근", "입", "니", "다"}
+    forbidden_phrases = {"click, click", "click click", "cough cough", "뉴", "스", "김", "수", "근", "입", "니", "다"}
     contains_forbidden_phrases = any(word in transcript_lower for word in forbidden_phrases)
-    forbidden_strings = {"eh.", "you", "bye.", "it's fine"}
+    forbidden_strings = {"eh.", "you", "it's fine"}
     is_forbidden_string = any(word == transcript_lower for word in forbidden_strings)
 
     # check if the transcript has words which are longer than 40 characters
@@ -326,8 +242,8 @@ def is_valid(transcript):
     return has_ascii_char and not contains_forbidden_phrases and not is_forbidden_string and not contains_long_words
 
 
-# Clean old transcripts: remove all chunks older than two hours and any tenants
 def clean_old_transcripts():
+    """Remove all chunks older than two hours and any tenants that become empty."""
     current_time_ms = int(time.time() * 1000)
     two_hours_ago_ms = current_time_ms - (2 * 60 * 60 * 1000)
 
@@ -340,14 +256,12 @@ def clean_old_transcripts():
                 empty_tenants.append(tenant_id)
                 continue
 
-            # Snapshot chunk ids; some chunk_ids may be non-numeric in principle, so we defensively skip those rather than crashing the worker thread.
             stale_chunks = []
             for chunk_id in list(transcripts.keys()):
                 try:
                     if int(chunk_id) < two_hours_ago_ms:
                         stale_chunks.append(chunk_id)
                 except (TypeError, ValueError):
-                    # Unknown id format -> leave it alone.
                     continue
 
             for chunk_id in stale_chunks:
@@ -361,15 +275,7 @@ def clean_old_transcripts():
 
 def merge_and_split_transcripts(transcripts):
     """
-    Take a ``{chunk_id: {'transcript': str}}`` mapping and produce a new
-    mapping of the same shape where text has been re-flowed onto sentence
-    boundaries (``.``, ``!``, ``?``).
-
-    The output preserves chunk_ids from the input (a subset of them: only
-    the chunk_ids at which a sentence boundary actually falls, plus the
-    last chunk for any trailing fragment). Values are dicts with a
-    ``'transcript'`` key so callers can use the same access pattern as
-    the underlying ``transcriptd`` store.
+    smartly merge and split transcripts based on sentence boundaries
     """
     sec = ".!?"
     merged = ""
@@ -399,7 +305,7 @@ def merge_and_split_transcripts(transcripts):
                 result[key] = {'transcript': head}
             merged = merged[index + 1:].strip()
 
-    # Any leftover (no terminal punctuation) attaches to the final input key.
+    # Any leftover text is attached to the final input key.
     if merged and keys:
         last_key = keys[-1]
         existing = result.get(last_key, {}).get('transcript')
@@ -411,14 +317,26 @@ def merge_and_split_transcripts(transcripts):
     return result
 
 
-# ---------------------------------------------------------------------------
-# Swagger / flask-restx models
-# ---------------------------------------------------------------------------
+# swagger and flask-restx models
 
 configure_input_model = api.model('ConfigureRequest', {
     'tenant_id': fields.String(required=True, description='Tenant ID for the session'),
-    'provider_name': fields.String(required=True, description='Canonical name of the provider (deepl, whisper, openai)'),
-    'config': fields.Raw(required=False, description='Dictionary of provider-specific settings (api_key, model_size)')
+    'transcription': fields.Raw(
+        required=False,
+        description=(
+            'Transcription provider config, e.g. {"provider_name": "whisper_local", "model_size": "small"}.'
+        ),
+    ),
+    'translation': fields.Raw(
+        required=False,
+        description=(
+            'Translation provider config, e.g. {"provider_name": "nllb_local"}.'
+        ),
+    ),
+    'stream_url': fields.String(
+        required=False,
+        description='Optional YouTube/HLS URL. When present, launches audio_grabber.py for this tenant.',
+    ),
 })
 
 configure_response_model = api.model('ConfigureResponse', {
@@ -426,10 +344,6 @@ configure_response_model = api.model('ConfigureResponse', {
     'message': fields.String(description='Status details')
 })
 
-# NOTE: api.model() registrations must use unique names. The original code
-# used 'Transcript' for both the /transcribe ack and the transcript-payload
-# schema, which made flask-restx silently overwrite the first registration
-# and produce a wrong Swagger doc for /transcribe.
 transcribe_input_model = api.model('Transcribe', {
     'audio_b64': fields.String(required=True, description='Base64 encoded audio data'),
     'chunk_id': fields.String(required=True, description='ID of the audio chunk'),
@@ -469,8 +383,7 @@ session_response_model = api.model('SessionResponse', {
 })
 
 
-
-# Shared Swagger parameter blocks (referenced by the REST resources below).
+# Shared Swagger parameter blocks
 _TENANT_PARAM = {'description': 'Tenant ID', 'default': '0000'}
 _SOURCE_PARAM = {
     'description': 'Resolve to the latest session for a source (mic|file|url|stdin|youtube). '
@@ -489,7 +402,7 @@ def _wants_sentences() -> bool:
     return request.args.get('sentences', default='false').strip().lower() == 'true'
 
 
-def _session_logic(success_status: int = 201):
+def _session_logic(success_status: int = 200):
     data = request.get_json(force=True, silent=True) or {}
     source = data.get('source') or request.args.get('source')
     if source not in VALID_SOURCES:
@@ -657,39 +570,199 @@ def _transcripts_size_logic():
     t = {k: v for k, v in t.items() if _in_chunk_range(k, fromid, untilid)}
     return {'size': len(t)}
 
+#Provider configuration endpoint
 @app.route('/api/v1/translate/configure', methods=['POST'])
 def configure_provider():
-   
-   
+    """
+    Configure transcription and/or translation providers for a tenant
+    """
     data = request.get_json(silent=True) or {}
-    
-    provider_name = data.get("provider_name")
-    if not provider_name:
-        return jsonify({"status": "error", "message": "Missing 'provider_name'"}), 400
-        
-    # Extract extra config variables to pass as **kwargs
-    config_kwargs = {k: v for k, v in data.items() if k != "provider_name"}
-    
+
+    tenant_id = data.get("tenant_id")
+    if not tenant_id:
+        return jsonify({"status": "error", "message": "Missing 'tenant_id'"}), 400
+
+    transcription = data.get("transcription")
+    translation = data.get("translation")
+
+    if not transcription and not translation:
+        return jsonify({
+            "status": "error",
+            "message": "At least one of 'transcription' or 'translation' must be provided.",
+        }), 400
+
     try:
-        registry.configure(provider_name=provider_name, **config_kwargs)
+        registry.configure(
+            tenant_id=tenant_id,
+            transcription=transcription,
+            translation=translation,
+        )
+        configured = []
+        if transcription:
+            configured.append(f"transcription='{transcription.get('provider_name')}'")
+        if translation:
+            configured.append(f"translation='{translation.get('provider_name')}'")
+
+        stream_url = data.get("stream_url")
+        if stream_url:
+            logger.info(f"Spawning audio_grabber for tenant {tenant_id} on url {stream_url}")
+            cmd = [
+                sys.executable,
+                "audio_grabber.py",
+                "--tenant", tenant_id,
+                "youtube",
+                "--url", stream_url,
+            ]
+
+            # Automatically use cookies file if present in the instance volume.
+            cookies_path = os.path.join(
+                os.path.dirname(os.path.abspath(__file__)), "instance", "youtubecookies.txt"
+            )
+            if os.path.exists(cookies_path):
+                logger.info(f"Using YouTube cookies file at {cookies_path}")
+                cmd.extend(["--cookies", cookies_path])
+
+            proc = subprocess.Popen(
+                cmd,
+                cwd=os.path.dirname(os.path.abspath(__file__)),
+                preexec_fn=os.setsid,
+            )
+            with grabber_lock:
+                grabber_processes[tenant_id] = proc
+
         return jsonify({
             "status": "success",
-            "message": f"Provider '{provider_name}' registered successfully."
+            "message": f"Configured {', '.join(configured)} for tenant '{tenant_id}'.",
         }), 200
     except ValueError as e:
         return jsonify({"status": "error", "message": str(e)}), 400
     except Exception as e:
         return jsonify({"status": "error", "message": f"Configuration failed: {str(e)}"}), 500
-    
+
+
+# SSE streaming endpoint
+
+@app.route('/api/v1/translate/stream', methods=['GET'])
+def translate_stream():
+    """
+    server sent events endpoint for real time captions
+    """
+    tenant_id = _resolve_tenant(request.args)
+    target_lang = request.args.get('target_lang')
+    last_chunk_id = _parse_int_arg(request.args, 'last_chunk_id', default=0)
+
+    def event_stream():
+        sent_transcripts = {}
+        translated_transcripts = {}
+        last_translations = {}
+        last_translation_time = 0.0
+
+        yield f"data: {json.dumps({'status': 'connected'})}\n\n"
+
+        while True:
+            with transcripts_lock:
+                tenant_transcripts = dict(transcriptd.get(tenant_id, {}))
+
+            now = time.time()
+            provider_name = registry.get_provider_name(tenant_id, "translation")
+            # Groq's free tier is rate-limited; enforce a minimum gap between calls.
+            throttle_interval = 2.1 if provider_name and "groq" in provider_name.lower() else 0.0
+            can_translate = (now - last_translation_time) >= throttle_interval
+
+            events_to_send = []
+
+            for cid in _numeric_sorted_keys(tenant_transcripts):
+                cid_int = _chunk_id_int(cid)
+                if cid_int >= last_chunk_id:
+                    text = tenant_transcripts[cid]['transcript']
+
+                    needs_tx_update = sent_transcripts.get(cid) != text
+                    needs_tl_update = target_lang and (translated_transcripts.get(cid) != text)
+
+                    if needs_tx_update or needs_tl_update:
+                        translation = last_translations.get(cid, "")
+
+                        if needs_tl_update and can_translate:
+                            try:
+                                lang_config = registry.get_language_config(tenant_id)
+                                source_lang = lang_config.get('source_lang', 'en')
+                                new_tl = registry.translate(tenant_id, text, source_lang, target_lang)
+                                if new_tl:
+                                    translation = new_tl
+                                last_translations[cid] = translation
+                                translated_transcripts[cid] = text
+                                last_translation_time = time.time()
+                                can_translate = False  # Only 1 translation per loop to spread load
+                            except Exception as e:
+                                logger.error(f"Stream translation error for {tenant_id}: {e}")
+
+                        # Send an event if the transcription changed, or if we just
+                        # successfully translated it to match the current transcription.
+                        if needs_tx_update or (needs_tl_update and translated_transcripts.get(cid) == text):
+                            events_to_send.append({
+                                "chunk_id": cid,
+                                "transcript": text,
+                                "translation": translation,
+                            })
+                            sent_transcripts[cid] = text
+
+            for payload in events_to_send:
+                yield f"data: {json.dumps(payload)}\n\n"
+
+            time.sleep(0.2)
+
+    return Response(event_stream(), mimetype="text/event-stream")
+
+
+# tenant lifecycle endpoints
+
+@app.route('/stop_event/<tenant_id>', methods=['POST'])
+def stop_event(tenant_id):
+    """
+    Kills the background audio grabber , release provider slots, and
+    delete all in-memory transcripts for tenant_id.
+    """
+    with grabber_lock:
+        proc = grabber_processes.pop(tenant_id, None)
+        if proc:
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+                proc.wait(timeout=3)
+            except Exception as e:
+                logger.error(f"Error killing grabber for {tenant_id}: {e}")
+
+    registry.remove(tenant_id)
+
+    with transcripts_lock:
+        transcriptd.pop(tenant_id, None)
+
+    return jsonify({"status": "success", "message": f"Event {tenant_id} stopped"}), 200
+
+
+@app.route('/api/v1/translate/status/<tenant_id>', methods=['GET'])
+def provider_status(tenant_id):
+    """
+    Check whether the models for a given tenant are fully loaded and ready.
+    The frontend polls this during the loading screen.
+    """
+    if registry.is_pipeline_ready(tenant_id):
+        return jsonify({"status": "ready"}), 200
+    return jsonify({"status": "warming_up"}), 200
+
+
+# REST transcript endpoints
 
 @api.route('/session')
 class Session(Resource):
     @api.expect(session_input_model)
-    @api.response(201, 'Created', session_response_model)
+    @api.response(200, 'Success', session_response_model)
     @api.response(400, 'Invalid source')
     def post(self):
+        '''
+        Start a new transcription session for an input source
+        '''
         try:
-            return _session_logic(success_status=201)
+            return _session_logic(success_status=200)
         except HTTPException:
             raise
         except Exception as e:
@@ -704,9 +777,7 @@ class Transcripts(Resource):
     @api.response(400, 'Bad Request')
     def post(self):
         '''
-        Submit an audio chunk for transcription.
-        Transcription is asynchronous: Poll GET /transcripts (or the first/latest/<id>
-        sub-resources) to retrieve results.
+        Submit an audio chunk for transcription
         '''
         try:
             return _transcribe_logic(success_status=202)
@@ -740,7 +811,7 @@ class TranscriptsCount(Resource):
     })
     @api.response(200, 'Success', size_response_model)
     def get(self):
-        '''Get the number of transcripts for a tenant (within the from/until range).'''
+        '''Get the number of transcripts for a tenant'''
         return jsonify(_transcripts_size_logic())
 
 
@@ -796,7 +867,6 @@ class TranscriptsLatest(Resource):
 
 @api.route('/transcripts/<int:chunk_id>')
 class TranscriptByID(Resource):
-    # chunk_ids are millisecond timestamps, so the <int:...> converter both validates the path segment and guarantees it can never shadow the static /transcripts/first|latest|count routes above.
     @api.doc(params={
         'tenant_id': _TENANT_PARAM,
         'source': _SOURCE_PARAM,
@@ -818,9 +888,7 @@ class TranscriptByID(Resource):
 
 
 # Deprecated RPC-style aliases.
-# Kept for one release so existing clients (older grabbers, bookmarked curls,
-# the HTML pages) don't break the moment this merges. Hidden from Swagger via
-# doc=False to keep the published API surface clean. 
+
 @api.route('/transcribe', doc=False)
 class TranscribeLegacy(Resource):
     def post(self):
@@ -906,6 +974,8 @@ class DeleteTranscriptLegacy(Resource):
         return jsonify(_delete_transcript_logic(request.args.get('chunk_id')))
 
 
+# audio worker thread
+
 _worker_thread = None
 _worker_lock = threading.Lock()
 
@@ -944,5 +1014,5 @@ if __name__ == '__main__':
             host,
         )
 
-    # use_reloader=False because the audio-worker thread above must not be spawned twice (the reloader runs the module twice, which would otherwise create a duplicate consumer on the queue).
+    # use_reloader=False because the audio-worker thread above must not be spawned twice
     app.run(host=host, port=port, debug=debug, use_reloader=False)

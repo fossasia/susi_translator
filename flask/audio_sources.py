@@ -376,6 +376,11 @@ class YouTubeSource(AudioSource):
     """
 
     _ALLOWED_HOSTS: frozenset[str] = frozenset({
+        "twitch.tv",
+        "www.twitch.tv",
+        "vimeo.com",
+        "www.vimeo.com",
+        "player.vimeo.com",
         "youtube.com",
         "www.youtube.com",
         "m.youtube.com",
