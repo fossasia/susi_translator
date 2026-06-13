@@ -43,7 +43,7 @@ class WhisperLocalProvider(TranscriptionProvider):
         except ImportError:
             return False
 
-    def _load_model(self):
+    def load_model(self):
         """
         Load the Whisper model into RAM. Called once on first transcribe() call
         """
@@ -98,7 +98,7 @@ class WhisperLocalProvider(TranscriptionProvider):
         Transcribe a normalized float32 mono audio array
         """
         if self._model is None:
-            self._load_model()
+            self.load_model()
 
         language = kwargs.get("language", self._language)
         temperature = kwargs.get("temperature", self._temperature)

@@ -45,6 +45,12 @@ class BaseProvider(ABC):
         """
         ...
 
+    def load_model(self) -> None:
+        """
+        Hook called on provider instantiation to load models into memory
+        """
+        pass
+
 
 class TranscriptionProvider(BaseProvider):
     """

@@ -17,16 +17,9 @@ import uuid
 import wave
 import io
 import os
+import atexit
 from dotenv import load_dotenv
 
-# GLOBAL SSL PATCH for bypassing strict OpenSSL 3.0 EOF checks (fixes yt-dlp & Whisper crashes)
-import ssl
-_orig_wrap_socket = ssl.SSLContext.wrap_socket
-def _wrap_socket_patch(self, *args, **kwargs):
-    self.options |= getattr(ssl, "OP_IGNORE_UNEXPECTED_EOF", 0)
-    self.options |= getattr(ssl, "OP_LEGACY_SERVER_CONNECT", 0x4)
-    return _orig_wrap_socket(self, *args, **kwargs)
-ssl.SSLContext.wrap_socket = _wrap_socket_patch
 
 from providers.registry import ProviderRegistry
 import providers.plugins  # Import to trigger provider registration
@@ -433,6 +426,21 @@ def _transcribe_logic(success_status: int = 202):
     return {"chunk_id": chunk_id, "tenant_id": tenant_id, "status": "processing"}, success_status
 
 
+def cleanup_grabbers():
+    """Ensure no audio_grabber subprocesses are left orphaned on server shutdown."""
+    with grabber_lock:
+        for tenant_id, proc in list(grabber_processes.items()):
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+                proc.wait(timeout=3)
+                logger.info(f"Cleaned up grabber for tenant {tenant_id}")
+            except Exception as e:
+                logger.error(f"Error cleaning up grabber for {tenant_id}: {e}")
+        grabber_processes.clear()
+
+atexit.register(cleanup_grabbers)
+
+
 def _get_transcript_logic(chunk_id):
     tenant_id = _resolve_tenant(request.args)
     with transcripts_lock:
@@ -659,57 +667,60 @@ def translate_stream():
 
         yield f"data: {json.dumps({'status': 'connected'})}\n\n"
 
-        while True:
-            with transcripts_lock:
-                tenant_transcripts = dict(transcriptd.get(tenant_id, {}))
+        try:
+            while True:
+                with transcripts_lock:
+                    tenant_transcripts = dict(transcriptd.get(tenant_id, {}))
 
-            now = time.time()
-            provider_name = registry.get_provider_name(tenant_id, "translation")
-            # Groq's free tier is rate-limited; enforce a minimum gap between calls.
-            throttle_interval = 2.1 if provider_name and "groq" in provider_name.lower() else 0.0
-            can_translate = (now - last_translation_time) >= throttle_interval
+                now = time.time()
+                provider_name = registry.get_provider_name(tenant_id, "translation")
+                # Groq's free tier is rate-limited; enforce a minimum gap between calls.
+                throttle_interval = 2.1 if provider_name and "groq" in provider_name.lower() else 0.0
+                can_translate = (now - last_translation_time) >= throttle_interval
 
-            events_to_send = []
+                events_to_send = []
 
-            for cid in _numeric_sorted_keys(tenant_transcripts):
-                cid_int = _chunk_id_int(cid)
-                if cid_int >= last_chunk_id:
-                    text = tenant_transcripts[cid]['transcript']
+                for cid in _numeric_sorted_keys(tenant_transcripts):
+                    cid_int = _chunk_id_int(cid)
+                    if cid_int >= last_chunk_id:
+                        text = tenant_transcripts[cid]['transcript']
 
-                    needs_tx_update = sent_transcripts.get(cid) != text
-                    needs_tl_update = target_lang and (translated_transcripts.get(cid) != text)
+                        needs_tx_update = sent_transcripts.get(cid) != text
+                        needs_tl_update = target_lang and (translated_transcripts.get(cid) != text)
 
-                    if needs_tx_update or needs_tl_update:
-                        translation = last_translations.get(cid, "")
+                        if needs_tx_update or needs_tl_update:
+                            translation = last_translations.get(cid, "")
 
-                        if needs_tl_update and can_translate:
-                            try:
-                                lang_config = registry.get_language_config(tenant_id)
-                                source_lang = lang_config.get('source_lang', 'en')
-                                new_tl = registry.translate(tenant_id, text, source_lang, target_lang)
-                                if new_tl:
-                                    translation = new_tl
-                                last_translations[cid] = translation
-                                translated_transcripts[cid] = text
-                                last_translation_time = time.time()
-                                can_translate = False  # Only 1 translation per loop to spread load
-                            except Exception as e:
-                                logger.error(f"Stream translation error for {tenant_id}: {e}")
+                            if needs_tl_update and can_translate:
+                                try:
+                                    lang_config = registry.get_language_config(tenant_id)
+                                    source_lang = lang_config.get('source_lang', 'en')
+                                    new_tl = registry.translate(tenant_id, text, source_lang, target_lang)
+                                    if new_tl:
+                                        translation = new_tl
+                                    last_translations[cid] = translation
+                                    translated_transcripts[cid] = text
+                                    last_translation_time = time.time()
+                                    can_translate = False  # Only 1 translation per loop to spread load
+                                except Exception as e:
+                                    logger.error(f"Stream translation error for {tenant_id}: {e}")
 
-                        # Send an event if the transcription changed, or if we just
-                        # successfully translated it to match the current transcription.
-                        if needs_tx_update or (needs_tl_update and translated_transcripts.get(cid) == text):
-                            events_to_send.append({
-                                "chunk_id": cid,
-                                "transcript": text,
-                                "translation": translation,
-                            })
-                            sent_transcripts[cid] = text
+                            # Send an event if the transcription changed, or if we just
+                            # successfully translated it to match the current transcription.
+                            if needs_tx_update or (needs_tl_update and translated_transcripts.get(cid) == text):
+                                events_to_send.append({
+                                    "chunk_id": cid,
+                                    "transcript": text,
+                                    "translation": translation,
+                                })
+                                sent_transcripts[cid] = text
 
-            for payload in events_to_send:
-                yield f"data: {json.dumps(payload)}\n\n"
+                for payload in events_to_send:
+                    yield f"data: {json.dumps(payload)}\n\n"
 
-            time.sleep(0.2)
+                time.sleep(0.2)
+        except GeneratorExit:
+            logger.info(f"SSE Client disconnected for tenant {tenant_id}")
 
     return Response(event_stream(), mimetype="text/event-stream")
 

@@ -18,11 +18,11 @@ dependencies = [
     "openai-whisper",
     "pyaudio",
     "pybars3",
-    "pytest>=9.0.3",
     "python-dotenv",
     "requests",
     "scipy",
     "torch",
+    "transformers",
     "yt-dlp",
 ]
 

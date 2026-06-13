@@ -65,7 +65,7 @@ class NLLBLocalProvider(TranslationProvider):
         except ImportError:
             return False
 
-    def _load_model(self):
+    def load_model(self):
         """
         Loads the NLLB tokenizer and model into RAM
         auto hardware detection with safe fallback to CPU 
@@ -109,8 +109,8 @@ class NLLBLocalProvider(TranslationProvider):
         source_lang = _resolve_lang_code(source_lang)
         target_lang = _resolve_lang_code(target_lang)
 
-        if self._model is None or self._tokenizer is None:
-            self._load_model()
+        if self._model is None:
+            self.load_model()
 
         max_length = kwargs.get("max_length", 512)
 

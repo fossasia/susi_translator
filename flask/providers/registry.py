@@ -219,16 +219,15 @@ class ProviderRegistry:
         Thread-safe lazy instantiation logic using the shared model singleton cache.
         All tenants that use the same provider and config will share one loaded model
         """
-        # Fast, lock-free read
-        tenant_entry = self._tenants.get(tenant_id)
+        with self._lock:
+            tenant_entry = self._tenants.get(tenant_id)
 
-        # Trigger fallback if the entry is missing OR if the provider_name is blank/None
-        if not tenant_entry or not tenant_entry.get(role) or not tenant_entry[role].get("provider_name"):
-            if role == "transcription":
-                fallback_name = _DEFAULT_TRANSCRIPTION_FALLBACK["provider_name"]
-                if fallback_name not in _PROVIDER_FACTORIES:
-                    return None
-                with self._lock:
+            # Trigger fallback if the entry is missing OR if the provider_name is blank/None
+            if not tenant_entry or not tenant_entry.get(role) or not tenant_entry[role].get("provider_name"):
+                if role == "transcription":
+                    fallback_name = _DEFAULT_TRANSCRIPTION_FALLBACK["provider_name"]
+                    if fallback_name not in _PROVIDER_FACTORIES:
+                        return None
                     if tenant_id not in self._tenants:
                         self._tenants[tenant_id] = {"transcription": None, "translation": None}
                     if not self._tenants[tenant_id].get("transcription") or not self._tenants[tenant_id]["transcription"].get("provider_name"):
@@ -240,12 +239,11 @@ class ProviderRegistry:
                             "provider_name": fallback_name,
                             "config": _DEFAULT_TRANSCRIPTION_FALLBACK["config"],
                         }
-                role_entry = self._tenants[tenant_id]["transcription"]
-            elif role == "translation":
-                fallback_name = _DEFAULT_TRANSLATION_FALLBACK["provider_name"]
-                if fallback_name not in _PROVIDER_FACTORIES:
-                    return None
-                with self._lock:
+                    role_entry = self._tenants[tenant_id]["transcription"]
+                elif role == "translation":
+                    fallback_name = _DEFAULT_TRANSLATION_FALLBACK["provider_name"]
+                    if fallback_name not in _PROVIDER_FACTORIES:
+                        return None
                     if tenant_id not in self._tenants:
                         self._tenants[tenant_id] = {"transcription": None, "translation": None}
                     if not self._tenants[tenant_id].get("translation") or not self._tenants[tenant_id]["translation"].get("provider_name"):
@@ -259,11 +257,11 @@ class ProviderRegistry:
                             "source_lang": _DEFAULT_TRANSLATION_FALLBACK["source_lang"],
                             "target_lang": _DEFAULT_TRANSLATION_FALLBACK["target_lang"],
                         }
-                role_entry = self._tenants[tenant_id]["translation"]
+                    role_entry = self._tenants[tenant_id]["translation"]
+                else:
+                    return None
             else:
-                return None
-        else:
-            role_entry = tenant_entry[role]
+                role_entry = tenant_entry[role]
 
         # Use the shared singleton cache — no more per-tenant model duplication.
         provider_name = role_entry["provider_name"]
@@ -279,11 +277,8 @@ class ProviderRegistry:
             provider = self._resolve_instance(tenant_id, role)
             if provider is None:
                 return
-            # Trigger the actual model load by calling _load_model directly
-            if hasattr(provider, '_load_model'):
-                provider._load_model()
-            elif hasattr(provider, '_lazy_load_model'):
-                provider._lazy_load_model()
+            # Trigger the actual model load by calling load_model directly
+            provider.load_model()
 
             with self._lock:
                 if tenant_id in self._tenants and self._tenants[tenant_id].get(role):

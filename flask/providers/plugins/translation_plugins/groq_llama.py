@@ -27,9 +27,6 @@ _LANG_NAMES: dict[str, str] = {
 }
 
 
-def _xor_mask(data: bytes, key: bytes) -> bytes:
-    """XOR obfuscation keeps the key out of plain-text memory."""
-    return bytes(b ^ key[i % len(key)] for i, b in enumerate(data))
 
 
 class GroqLlamaProvider(TranslationProvider):
@@ -49,23 +46,17 @@ class GroqLlamaProvider(TranslationProvider):
                 "Get a free key at https://console.groq.com"
             )
 
-        self._salt = os.urandom(32)
-        self._masked_key: bytes = _xor_mask(raw_key.encode(), self._salt)
+        # Instantiate client once and remove key from config dict
+        import groq as _groq
+        self.client = _groq.Groq(api_key=raw_key)
+        self.config.pop("api_key", None)
 
     @property
     def provider_name(self) -> str:
         return "groq_llama"
 
     def is_available(self) -> bool:
-        try:
-            import groq as _groq
-            _groq.Groq(api_key=self._reveal_key())
-            return True
-        except Exception:
-            return False
-
-    def _reveal_key(self) -> str:
-        return _xor_mask(self._masked_key, self._salt).decode()
+        return self.client is not None
 
     def translate(
         self,
@@ -92,9 +83,7 @@ class GroqLlamaProvider(TranslationProvider):
 
         try:
             import groq as _groq
-
-            client = _groq.Groq(api_key=self._reveal_key())
-            response = client.chat.completions.create(
+            response = self.client.chat.completions.create(
                 model=self.MODEL,
                 messages=[
                     {"role": "system", "content": system_prompt},

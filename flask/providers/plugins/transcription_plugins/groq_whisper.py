@@ -22,10 +22,6 @@ logger = logging.getLogger(__name__)
 _MIN_INTERVAL_SECONDS: float = 3.1
 
 
-def _xor_mask(data: bytes, key: bytes) -> bytes:
-    """Keeps the key out of plain-text memory"""
-    return bytes(b ^ key[i % len(key)] for i, b in enumerate(data))
-
 
 class GroqWhisperProvider(TranscriptionProvider):
     """
@@ -45,9 +41,10 @@ class GroqWhisperProvider(TranscriptionProvider):
                 "Get a free key at https://console.groq.com"
             )
 
-        # XOR obfuscate the key so it is not visible in memory dumps or logs
-        self._salt = os.urandom(32)
-        self._masked_key: bytes = _xor_mask(raw_key.encode(), self._salt)
+        # Instantiate client once and remove key from config dict
+        import groq as _groq
+        self.client = _groq.Groq(api_key=raw_key)
+        self.config.pop("api_key", None)
 
         # Rate-limit state
         self._last_call_ts: float = 0.0
@@ -59,16 +56,7 @@ class GroqWhisperProvider(TranscriptionProvider):
         return "groq_whisper"
 
     def is_available(self) -> bool:
-        try:
-            import groq as _groq
-            _groq.Groq(api_key=self._reveal_key())
-            return True
-        except Exception:
-            return False
-
-    def _reveal_key(self) -> str:
-        """Reconstruct the clear text API key for one SDK call"""
-        return _xor_mask(self._masked_key, self._salt).decode()
+        return self.client is not None
 
     def _wait_for_rate_limit(self) -> None:
         """throtlling here for the rate limiters"""
@@ -115,9 +103,7 @@ class GroqWhisperProvider(TranscriptionProvider):
 
         try:
             import groq as _groq
-
-            client = _groq.Groq(api_key=self._reveal_key())
-            transcription = client.audio.transcriptions.create(
+            transcription = self.client.audio.transcriptions.create(
                 file=("audio.wav", wav_bytes),
                 model=self.MODEL,
                 response_format="text",
