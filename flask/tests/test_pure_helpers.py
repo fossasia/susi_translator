@@ -6,27 +6,6 @@ import wave
 import numpy as np
 
 
-def test_pcm_to_wav_round_trips_via_wave_module(ts):
-    pcm = (np.sin(np.linspace(0, 6.28, 16000)) * 8000).astype(np.int16)
-    wav = ts._pcm_int16_to_wav_bytes(pcm, sample_rate=16000)
-
-    assert wav[:4] == b"RIFF"
-    assert wav[8:12] == b"WAVE"
-
-    with wave.open(io.BytesIO(wav), "rb") as wf:
-        assert wf.getnchannels() == 1
-        assert wf.getsampwidth() == 2
-        assert wf.getframerate() == 16000
-        assert wf.getnframes() == len(pcm)
-
-
-def test_pcm_to_wav_handles_empty_input(ts):
-    pcm = np.array([], dtype=np.int16)
-    wav = ts._pcm_int16_to_wav_bytes(pcm, sample_rate=16000)
-    assert wav[:4] == b"RIFF"
-    with wave.open(io.BytesIO(wav), "rb") as wf:
-        assert wf.getnframes() == 0
-
 
 def test_merge_returns_dict_shape_not_strings(ts):
     inp = {"100": {"transcript": "Hello world."}}

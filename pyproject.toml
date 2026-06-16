@@ -22,6 +22,7 @@ dependencies = [
     "requests",
     "scipy",
     "torch",
+    "transformers",
     "yt-dlp",
 ]
 

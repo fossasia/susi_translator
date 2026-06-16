@@ -376,6 +376,11 @@ class YouTubeSource(AudioSource):
     """
 
     _ALLOWED_HOSTS: frozenset[str] = frozenset({
+        "twitch.tv",
+        "www.twitch.tv",
+        "vimeo.com",
+        "www.vimeo.com",
+        "player.vimeo.com",
         "youtube.com",
         "www.youtube.com",
         "m.youtube.com",
@@ -433,13 +438,15 @@ class YouTubeSource(AudioSource):
 
 
     def _build_ydl_argv(self) -> List[str]:
-        # ``--`` before the URL ensures it can never be parsed as a flag.
         argv: List[str] = [
             "yt-dlp",
             "--quiet",
             "--no-warnings",
             "--no-playlist",
             "--no-progress",
+            "--no-part",            # no partial-file writes
+            "--no-continue",        # no resume from partial state
+            "--extractor-retries", "0",  # don't retry unrecognised extractors
             "-f", self._format_selector,
             "-o", "-",
         ]
