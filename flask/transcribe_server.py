@@ -701,7 +701,6 @@ def configure_provider():
                 "audio_grabber.py",
                 "--tenant", tenant_id,
                 "--auth-token", internal_token,
-                "youtube",
                 source_type,
                 "--url", stream_url,
             ]
