@@ -32,6 +32,9 @@ from auth.admin_panel import SecureModelView, SecureAdminIndexView
 
 from providers.registry import ProviderRegistry
 import providers.plugins 
+from dotenv import load_dotenv
+
+from audio_sources import URLSource, YouTubeSource
 
 
 # Load environment variables from .env file
@@ -100,6 +103,7 @@ transcripts_lock = threading.Lock()
 
 # Background audio grabber subprocesses, keyed by tenant_id.
 grabber_processes = {}
+ 
 grabber_lock = threading.Lock()
 
 # FIFO queue of pending audio chunks awaiting transcription.
@@ -365,7 +369,19 @@ configure_input_model = api.model('ConfigureRequest', {
     ),
     'stream_url': fields.String(
         required=False,
-        description='Optional YouTube/HLS URL. When present, launches audio_grabber.py for this tenant.',
+        description=(
+            'Optional stream URL. Validated in the parent process before spawning audio_grabber.py. '
+            'Rejected with HTTP 400 for invalid scheme, missing host, or (for youtube) non-allowlisted domain.'
+        ),
+    ),
+    'source_type': fields.String(
+        required=False,
+        enum=['youtube', 'url'],
+        description=(
+            'Audio source type for stream_url. '
+            '"youtube" (default) enforces a recognised YouTube/Twitch/Vimeo host allowlist. '
+            '"url" allows any HTTP/HTTPS URL with a non-empty host.'
+        ),
     ),
 })
 
@@ -463,17 +479,23 @@ def _transcribe_logic(success_status: int = 202):
     return {"chunk_id": chunk_id, "tenant_id": tenant_id, "status": "processing"}, success_status
 
 
+def _kill_grabber(proc, tenant_id: str) -> None:
+    """Send SIGTERM to the grabber's entire process group, then wait."""
+    try:
+        os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+        proc.wait(timeout=3)
+        logger.info(f"Stopped grabber for tenant {tenant_id}")
+    except Exception as e:
+        logger.error(f"Error stopping grabber for {tenant_id}: {e}")
+
+
 def cleanup_grabbers():
     """Ensure no audio_grabber subprocesses are left orphaned on server shutdown."""
     with grabber_lock:
         for tenant_id, proc in list(grabber_processes.items()):
-            try:
-                os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
-                proc.wait(timeout=3)
-                logger.info(f"Cleaned up grabber for tenant {tenant_id}")
-            except Exception as e:
-                logger.error(f"Error cleaning up grabber for {tenant_id}: {e}")
+            _kill_grabber(proc, tenant_id)
         grabber_processes.clear()
+
 
 atexit.register(cleanup_grabbers)
 
@@ -615,7 +637,7 @@ def _transcripts_size_logic():
     t = {k: v for k, v in t.items() if _in_chunk_range(k, fromid, untilid)}
     return {'size': len(t)}
 
-# Provider configuration endpoint
+#Provider configuration endpoint
 @app.route('/api/v1/translate/configure', methods=['POST'])
 @organizer_required
 def configure_provider():
@@ -655,22 +677,50 @@ def configure_provider():
             from flask_jwt_extended import create_access_token
             internal_token = create_access_token(identity="internal_grabber")
         
+            source_type = data.get("source_type", "youtube")
+
+            if source_type == "youtube":
+                YouTubeSource._validate_url(stream_url)
+            elif source_type == "url":
+                URLSource._validate_url(stream_url)
+            else:
+                return jsonify({
+                    "status": "error",
+                    "message": (
+                        f"Unknown source_type {source_type!r}. "
+                        "Must be 'youtube' or 'url'."
+                    ),
+                }), 400
+
+            logger.info(
+                f"Spawning audio_grabber for tenant {tenant_id} "
+                f"on {source_type} url {stream_url}"
+            )
             cmd = [
                 sys.executable,
                 "audio_grabber.py",
                 "--tenant", tenant_id,
                 "--auth-token", internal_token,
                 "youtube",
+                source_type,
                 "--url", stream_url,
             ]
 
-            # Automatically use cookies file if present in the instance volume.
-            cookies_path = os.path.join(
-                os.path.dirname(os.path.abspath(__file__)), "instance", "youtubecookies.txt"
-            )
-            if os.path.exists(cookies_path):
-                logger.info(f"Using YouTube cookies file at {cookies_path}")
-                cmd.extend(["--cookies", cookies_path])
+            # Only applicable for the youtube source.
+            if source_type == "youtube":
+                cookies_path = os.path.join(
+                    os.path.dirname(os.path.abspath(__file__)), "instance", "youtubecookies.txt"
+                )
+                if os.path.exists(cookies_path):
+                    logger.info(f"Using YouTube cookies file at {cookies_path}")
+                    cmd.extend(["--cookies", cookies_path])
+
+            # Kill any existing grabber for this tenant before replacing it.
+            # Without this, the old yt-dlp/ffmpeg process group is leaked.
+            with grabber_lock:
+                old_proc = grabber_processes.pop(tenant_id, None)
+            if old_proc:
+                _kill_grabber(old_proc, tenant_id)
 
             proc = subprocess.Popen(
                 cmd,
@@ -679,6 +729,7 @@ def configure_provider():
             )
             with grabber_lock:
                 grabber_processes[tenant_id] = proc
+
 
         return jsonify({
             "status": "success",
@@ -717,8 +768,8 @@ def translate_stream():
 
                 now = time.time()
                 provider_name = registry.get_provider_name(tenant_id, "translation")
-                # Groq's free tier is rate-limited; enforce a minimum gap between calls.
-                throttle_interval = 2.1 if provider_name and "groq" in provider_name.lower() else 0.0
+                # Default throttle interval (can be increased for rate-limited providers)
+                throttle_interval = 0.0
                 can_translate = (now - last_translation_time) >= throttle_interval
 
                 events_to_send = []
@@ -779,12 +830,8 @@ def stop_event(tenant_id):
     """
     with grabber_lock:
         proc = grabber_processes.pop(tenant_id, None)
-        if proc:
-            try:
-                os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
-                proc.wait(timeout=3)
-            except Exception as e:
-                logger.error(f"Error killing grabber for {tenant_id}: {e}")
+    if proc:
+        _kill_grabber(proc, tenant_id)
 
     registry.remove(tenant_id)
 

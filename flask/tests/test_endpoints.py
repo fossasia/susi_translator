@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import signal
 import time
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 import pytest
 
 from providers.registry import register_provider
@@ -172,3 +173,42 @@ def test_configure_endpoint_rejects_empty_blocks(client) -> None:
     data = response.get_json()
     assert data["status"] == "error"
     assert "At least one of 'transcription' or 'translation' must be provided." in data["message"]
+
+
+def test_reconfigure_kills_old_grabber_before_spawning_new_one(client, ts) -> None:
+    """Regression: calling /configure twice with stream_url for the same tenant must
+    kill the first grabber before spawning the second. Without the fix, the old
+    yt-dlp/ffmpeg process group is leaked."""
+    first_proc = MagicMock()
+    first_proc.pid = 1001
+    second_proc = MagicMock()
+    second_proc.pid = 1002
+
+    call_count = 0
+
+    def make_proc(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        return first_proc if call_count == 1 else second_proc
+
+    payload = {
+        "tenant_id": "reconfigure_tenant",
+        "transcription": {"provider_name": "dummy_stt"},
+        "stream_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+    }
+
+    with patch("transcribe_server.subprocess.Popen", side_effect=make_proc), \
+         patch("transcribe_server.os.killpg") as mock_killpg, \
+         patch("transcribe_server.os.getpgid", side_effect=lambda pid: pid):
+
+        # First configure — spawns first_proc, nothing to kill yet.
+        client.post("/api/v1/translate/configure", json=payload)
+        assert mock_killpg.call_count == 0
+
+        # Second configure — must kill first_proc's group before spawning second_proc.
+        client.post("/api/v1/translate/configure", json=payload)
+        mock_killpg.assert_called_once_with(first_proc.pid, signal.SIGTERM)
+
+    # After both calls, only second_proc should be tracked.
+    with ts.grabber_lock:
+        assert ts.grabber_processes.get("reconfigure_tenant") is second_proc

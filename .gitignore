@@ -23,3 +23,4 @@ flask/speech.pcm
 flask/tone.pcm
 *.pcm
 *.mp3
+flask/instance/
