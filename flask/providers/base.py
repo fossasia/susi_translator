@@ -19,9 +19,8 @@ class TranscriptionError(Exception):
     """Base exception for all transcription related failures"""
 
 
-class ProviderConfigError(Exception):
+class ProviderConfigError(TranslationError, TranscriptionError):
     """Raised when a provider is initialized with missing or malformed configuration"""
-
 
 class BaseProvider(ABC):
     """

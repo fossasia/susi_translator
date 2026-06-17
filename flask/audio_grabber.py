@@ -4,43 +4,17 @@ SUSI Translator audio grabber
 Reads audio from one of five sources (microphone, file, URL, stdin,
 YouTube), buffers up to ~10 seconds while resetting on silence, and POSTs
 base64-encoded chunks to the transcription server's ``/transcripts``
-endpoint.
-
-System requirements
--------------------
-- ``mic``     : pyaudio (live capture).
-- ``file``    : pydub Python package + the ``ffmpeg`` binary on PATH.
-- ``url``     : the ``ffmpeg`` binary on PATH.
-- ``stdin``   : none beyond the standard library.
-- ``youtube`` : the ``yt-dlp`` Python package + the ``ffmpeg`` binary on
-                PATH.
-
-To fetch transcripts, curl with ``?source=<name>`` 
-
-    curl "http://localhost:5040/transcripts?source=mic"
-    curl -X DELETE "http://localhost:5040/transcripts/first?source=youtube"
-
-``--tenant <id>`` is still accepted as an explicit
-override (e.g. for reconnecting to a known session id).
-
-Examples
---------
-::
-
-    python audio_grabber.py mic --server http://localhost:5040
-    python audio_grabber.py file --path talk.mp3 --realtime
-    python audio_grabber.py url  --url https://example.com/stream.mp3
-    python audio_grabber.py youtube --url https://www.youtube.com/live/EXAMPLE_ID
-    ffmpeg -i input.wav -f s16le -ac 1 -ar 16000 - | \\
-        python audio_grabber.py stdin
+endpoint
 """
 
 from __future__ import annotations
 
 import argparse
 import base64
+import os
 import struct
 import sys
+import threading
 import time
 import uuid
 import http.cookiejar
@@ -109,17 +83,82 @@ def _build_session(auth_cookie_path: Optional[str] = None, auth_token: Optional[
 
 class TranscribeUploader:
     """
-    POSTs accumulated audio buffers to the transcription server.
-
-    Body shape:
-        { "audio_b64": str, "chunk_id": str, "tenant_id": str }
+    POSTs accumulated audio buffers to the transcription server
     """
 
-    def __init__(self, server: str, tenant_id: str, auth_cookie_path: Optional[str] = None, auth_token: Optional[str] = None) -> None:
+    _EXPIRY_MINUTES: int = int(os.environ.get("INTERNAL_TOKEN_EXPIRY_MINUTES", "5"))
+    # Refresh at 80% of the expiry window to give plenty of margin.
+    _REFRESH_INTERVAL: float = _EXPIRY_MINUTES * 60 * 0.80
+
+    def __init__(
+        self,
+        server: str,
+        tenant_id: str,
+        auth_cookie_path: Optional[str] = None,
+        auth_token: Optional[str] = None,
+    ) -> None:
         self._url: str = server.rstrip("/") + "/transcripts"
+        self._refresh_url: str = server.rstrip("/") + "/internal/token-refresh"
         self._tenant_id: str = tenant_id
         self._session: requests.Session = _build_session(auth_cookie_path, auth_token)
+        # Mutable token slot protected by a lock so the refresh thread and
+        # the main upload thread don't race on cookie updates.
+        self._token_lock = threading.Lock()
+        self._current_token: Optional[str] = auth_token
 
+        if auth_token:
+            # Start the background refresh thread only when we have an
+            # internal token to manage .
+            self._start_refresh_thread()
+
+    # Token refresh helpers
+    def _update_token(self, new_token: str) -> None:
+        """Thread-safe cookie slot update."""
+        with self._token_lock:
+            self._current_token = new_token
+            self._session.cookies.set("access_token_cookie", new_token)
+
+    def _refresh_token(self) -> bool:
+        """
+        Call /internal/token-refresh with the current token.
+        Returns True on success, False on any failure.
+        """
+        with self._token_lock:
+            current = self._current_token
+        if not current:
+            return False
+        try:
+            resp = requests.post(
+                self._refresh_url,
+                cookies={"access_token_cookie": current},
+                timeout=10,
+            )
+            if resp.status_code == 200:
+                new_token = resp.json().get("token")
+                if new_token:
+                    self._update_token(new_token)
+                    print("[token-refresh] Internal token refreshed successfully.")
+                    return True
+            print(f"[token-refresh] Unexpected response {resp.status_code}: {resp.text}")
+        except requests.exceptions.RequestException as exc:
+            print(f"[token-refresh] Could not reach server: {exc}")
+        return False
+
+    def _refresh_loop(self) -> None:
+        """Proactively refresh the token at 80% of its lifetime."""
+        while True:
+            time.sleep(self._REFRESH_INTERVAL)
+            self._refresh_token()
+
+    def _start_refresh_thread(self) -> None:
+        t = threading.Thread(
+            target=self._refresh_loop,
+            name="token-refresh",
+            daemon=True,  # dies automatically when the main process exits
+        )
+        t.start()
+
+    # Chunk upload
     def send(self, buffer: bytes, chunk_id: str) -> None:
         if not buffer:
             return
@@ -135,18 +174,31 @@ class TranscribeUploader:
                 headers={"Content-Type": "application/json"},
                 timeout=30,
             )
-            # New REST endpoint returns 202 Accepted (transcription is async);
+            # New REST endpoint returns 202 Accepted, transcription is async;
             # older servers returned 200. Treat both as success.
             if response.status_code in (200, 202):
                 print(f"Sent chunk {chunk_id} with {len(buffer)} bytes")
+            elif response.status_code == 401 and self._current_token:
+                # Defence-in-depth: token expired despite proactive refresh
+                # Refresh immediately and retry once.
+                print(f"[token-refresh] 401 on chunk {chunk_id} — refreshing token and retrying.")
+                if self._refresh_token():
+                    retry = self._session.post(
+                        self._url,
+                        json=payload,
+                        headers={"Content-Type": "application/json"},
+                        timeout=30,
+                    )
+                    if retry.status_code in (200, 202):
+                        print(f"Sent chunk {chunk_id} (after token refresh).")
+                    else:
+                        print(f"Error sending chunk after refresh: {retry.status_code}: {retry.text}")
+                else:
+                    print(f"Error: could not refresh token. Chunk {chunk_id} dropped.")
             else:
-                print(
-                    f"Error sending chunk: {response.status_code}: {response.text}"
-                )
+                print(f"Error sending chunk: {response.status_code}: {response.text}")
         except MaxRetryError:
-            print(
-                "Error: Maximum retries exceeded. Could not connect to the endpoint."
-            )
+            print("Error: Maximum retries exceeded. Could not connect to the endpoint.")
         except requests.exceptions.RequestException as exc:
             print(f"Error sending chunk: {exc}")
 
@@ -385,13 +437,19 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
     source = _build_source(args)
+    auth_token: Optional[str] = os.environ.get("GRABBER_AUTH_TOKEN") or args.auth_token
 
-    # Resolve the tenant_id for this run. If the user passed --tenant, honour it; otherwise ask the server to mint one and register it under this source name so `curl ...?source=<name>` will work.
+    # Resolve the tenant_id for this run.
     if args.tenant:
         tenant_id = args.tenant
         registered = False
     else:
-        tenant_id = _register_session(server=args.server, source=args.source, auth_cookie_path=args.auth_cookie, auth_token=args.auth_token)
+        tenant_id = _register_session(
+            server=args.server,
+            source=args.source,
+            auth_cookie_path=args.auth_cookie,
+            auth_token=auth_token,
+        )
         registered = True
 
     print("=" * 60)
@@ -406,7 +464,13 @@ def main(argv: Optional[List[str]] = None) -> int:
               f"/transcripts/first?tenant_id={tenant_id}\"")
     print("=" * 60)
 
-    run(source=source, server=args.server, tenant_id=tenant_id, auth_cookie_path=args.auth_cookie, auth_token=args.auth_token)
+    run(
+        source=source,
+        server=args.server,
+        tenant_id=tenant_id,
+        auth_cookie_path=args.auth_cookie,
+        auth_token=auth_token,
+    )
     return 0
 
 

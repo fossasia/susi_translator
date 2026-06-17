@@ -12,9 +12,6 @@ _FLASK_DIR = os.path.abspath(os.path.join(_HERE, ".."))
 if _FLASK_DIR not in sys.path:
     sys.path.insert(0, _FLASK_DIR)
 
-# Pin env BEFORE importing transcribe_server (it reads these at import time).
-# Override (not setdefault) so a developer's shell can't pull in heavy deps
-# or flip on debug mode.
 os.environ["WHISPER_SERVER_USE"] = "true"
 os.environ["FLASK_DEBUG"] = "false"
 os.environ["FLASK_HOST"] = "127.0.0.1"
@@ -38,6 +35,9 @@ def ts():
             ts_mod.audio_stack.task_done()
         except Exception:
             break
+
+    with ts_mod.grabber_lock:
+        ts_mod.grabber_processes.clear()
 
     return ts_mod
 

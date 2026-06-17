@@ -1,7 +1,6 @@
 from flask import Flask, request, jsonify, abort, Response, redirect, url_for, render_template
 from flask_restx import Api, Resource, fields
 from flask_cors import CORS
-from flask_sqlalchemy import SQLAlchemy
 from flask_jwt_extended import JWTManager, verify_jwt_in_request
 from flask_bcrypt import Bcrypt
 from werkzeug.exceptions import HTTPException
@@ -43,6 +42,42 @@ load_dotenv()
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s %(levelname)s: %(message)s')
 logger = logging.getLogger(__name__)
 
+# Known-weak placeholders that must never be used in production.
+_KNOWN_WEAK_JWT_SECRETS: frozenset[str] = frozenset({
+    "change-me",
+    "changeme",
+    "secret",
+    "mysecret",
+    "jwt_secret",
+    "your_jwt_secret_key",
+})
+
+
+def _require_secret_key(env_var: str = "JWT_SECRET_KEY") -> str:
+    """
+    Return the value of env_var or abort startup with a clear error
+    """
+    value = os.getenv(env_var, "").strip()
+    if not value:
+        raise RuntimeError(
+            f"[SECURITY] {env_var} is not set. "
+            "Set a cryptographically random value (e.g. `openssl rand -hex 32`) "
+            "in your .env file or environment before starting the server."
+        )
+    if value.lower() in _KNOWN_WEAK_JWT_SECRETS:
+        raise RuntimeError(
+            f"[SECURITY] {env_var} is set to a known placeholder ({value!r}). "
+            "Replace it with a cryptographically random value "
+            "(e.g. `openssl rand -hex 32`)."
+        )
+    if len(value) < 32:
+        raise RuntimeError(
+            f"[SECURITY] {env_var} is too short ({len(value)} chars; minimum 32). "
+            "Use `openssl rand -hex 32` to generate a strong secret."
+        )
+    return value
+
+
 def _env_bool(name: str, default: bool = False) -> bool:
     raw = os.getenv(name)
     if raw is None:
@@ -70,11 +105,29 @@ logger.info(f"CORS allowed origins: {_cors_origins}")
 # Database, Auth, JWT 
 app.config["SQLALCHEMY_DATABASE_URI"] = os.getenv("DATABASE_URL", "sqlite:///susi.db")
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
-app.config["JWT_SECRET_KEY"] = os.getenv("JWT_SECRET_KEY", "change-me")
+app.config["JWT_SECRET_KEY"] = _require_secret_key("JWT_SECRET_KEY")
 app.config["JWT_TOKEN_LOCATION"] = ["cookies"]
-app.config["JWT_COOKIE_SECURE"] = False
-app.config["JWT_COOKIE_CSRF_PROTECT"] = False
+
+
+
+app.config["JWT_COOKIE_SECURE"] = _env_bool("JWT_COOKIE_SECURE", default=False)
+app.config["JWT_COOKIE_SAMESITE"] = os.getenv("JWT_COOKIE_SAMESITE", "Lax")
+
+# Default: match CSRF protection to whether HTTPS is enabled.
+# Operators can override explicitly via JWT_COOKIE_CSRF_PROTECT=true/false.
+_https_mode: bool = app.config["JWT_COOKIE_SECURE"]
+app.config["JWT_COOKIE_CSRF_PROTECT"] = _env_bool(
+    "JWT_COOKIE_CSRF_PROTECT", default=_https_mode
+)
+
 app.config["JWT_ACCESS_TOKEN_EXPIRES"] = timedelta(days=7)
+
+# Lifetime of the short-lived token issued to the audio_grabber subprocess.
+# The grabber refreshes it proactively at 80% of this window.
+# Must be greater than the longest possible audio chunk upload time (~30 s).
+_INTERNAL_TOKEN_EXPIRY: timedelta = timedelta(
+    minutes=int(os.getenv("INTERNAL_TOKEN_EXPIRY_MINUTES", "5"))
+)
 
 from auth.models import db
 db.init_app(app)
@@ -675,7 +728,15 @@ def configure_provider():
         if stream_url:
             logger.info(f"Spawning audio_grabber for tenant {tenant_id} on url {stream_url}")
             from flask_jwt_extended import create_access_token
-            internal_token = create_access_token(identity="internal_grabber")
+            # - 24 hours ensures long-running live streams do not fail midway.
+            #   (The grabber must authenticate every chunk it sends).
+            # - role=internal is rejected by organizer_required on every
+            #   endpoint except POST /transcripts (see auth/decorators.py).
+            internal_token = create_access_token(
+                identity="internal_grabber",
+                expires_delta=_INTERNAL_TOKEN_EXPIRY,
+                additional_claims={"role": "internal"},
+            )
         
             source_type = data.get("source_type", "youtube")
 
@@ -700,10 +761,12 @@ def configure_provider():
                 sys.executable,
                 "audio_grabber.py",
                 "--tenant", tenant_id,
-                "--auth-token", internal_token,
                 source_type,
                 "--url", stream_url,
             ]
+            # Pass the auth token via environment variable, NOT as a CLI
+            # argument, so it never appears in `ps aux` or shell history.
+            grabber_env = {**os.environ, "GRABBER_AUTH_TOKEN": internal_token}
 
             # Only applicable for the youtube source.
             if source_type == "youtube":
@@ -725,6 +788,7 @@ def configure_provider():
                 cmd,
                 cwd=os.path.dirname(os.path.abspath(__file__)),
                 preexec_fn=os.setsid,
+                env=grabber_env,
             )
             with grabber_lock:
                 grabber_processes[tenant_id] = proc
@@ -750,6 +814,8 @@ def translate_stream():
     """
     tenant_id = _resolve_tenant(request.args)
     target_lang = request.args.get('target_lang')
+    if not target_lang:
+        target_lang = registry.get_language_config(tenant_id).get('target_lang')
     last_chunk_id = _parse_int_arg(request.args, 'last_chunk_id', default=0)
 
     def event_stream():
@@ -838,6 +904,42 @@ def stop_event(tenant_id):
         transcriptd.pop(tenant_id, None)
 
     return jsonify({"status": "success", "message": f"Event {tenant_id} stopped"}), 200
+
+
+@app.route('/internal/token-refresh', methods=['POST'])
+def internal_token_refresh():
+    """
+    Issues a fresh short-lived internal token to a running audio_grabber.
+
+    The grabber calls this endpoint proactively before its current token
+    expires (at ~80% of _INTERNAL_TOKEN_EXPIRY), so long-running livestreams
+    never hit an ExpiredSignatureError on POST /transcripts.
+
+    Authentication: the caller must present a still-valid role=internal JWT
+    cookie (access_token_cookie). The endpoint itself is NOT protected by
+    @organizer_required — internal tokens cannot access organiser routes.
+    """
+    from flask_jwt_extended import verify_jwt_in_request, get_jwt, create_access_token
+    from flask_jwt_extended.exceptions import JWTExtendedException
+    from jwt.exceptions import PyJWTError
+    try:
+        verify_jwt_in_request(locations=["cookies"])
+        claims = get_jwt()
+    except (JWTExtendedException, PyJWTError) as exc:
+        logger.warning(f"token-refresh rejected: {exc}")
+        return jsonify({"status": "error", "message": "Authentication required."}), 401
+
+    if claims.get("role") != "internal":
+        # Organiser tokens must not be able to use this endpoint to extend themselves.
+        return jsonify({"status": "error", "message": "Forbidden."}), 403
+
+    new_token = create_access_token(
+        identity="internal_grabber",
+        expires_delta=_INTERNAL_TOKEN_EXPIRY,
+        additional_claims={"role": "internal"},
+    )
+    logger.debug("Issued refreshed internal token to audio_grabber")
+    return jsonify({"token": new_token}), 200
 
 
 @app.route('/api/v1/translate/status/<tenant_id>', methods=['GET'])
