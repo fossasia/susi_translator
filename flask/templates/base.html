@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>{% block title %}SUSI Translator{% endblock %}</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}" />
+    {% block head %}{% endblock %}
+  </head>
+  <body>
+
+    <header class="navbar">
+      <div class="nav-brand-group">
+        <a class="brand" href="/home">SUSI Translator</a>
+        <span class="brand-tag">SUSI.AI</span>
+      </div>
+
+      {% if request.cookies.get('access_token_cookie') %}
+        <button type="button" id="logoutBtn" class="logout-btn" onclick="doLogout()">Log Out</button>
+      {% endif %}
+    </header>
+
+    <main>
+      {% block content %}{% endblock %}
+    </main>
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        <div id="flash-container">
+          {% for category, message in messages %}
+            <div class="flash flash-{{ category }}">{{ message }}</div>
+          {% endfor %}
+        </div>
+      {% endif %}
+    {% endwith %}
+
+    <script>
+      async function doLogout() {
+        const btn = document.getElementById("logoutBtn");
+        if (btn) { btn.disabled = true; btn.innerText = "Logging out…"; }
+        try {
+          await fetch("/auth/api/logout", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            credentials: "same-origin",
+          });
+        } catch (_) {}
+        window.location.href = "/auth/login";
+      }
+    </script>
+
+    {% block scripts %}{% endblock %}
+  </body>
+</html>

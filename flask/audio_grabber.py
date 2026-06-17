@@ -24,6 +24,8 @@ import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from urllib3.exceptions import MaxRetryError
+import urllib3
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 from audio_sources import (
     AudioSource,
@@ -64,6 +66,7 @@ def _build_session(auth_cookie_path: Optional[str] = None, auth_token: Optional[
     )
     adapter = HTTPAdapter(max_retries=retry_policy)
     session = requests.Session()
+    session.verify = False
     session.mount("http://", adapter)
     session.mount("https://", adapter)
     
@@ -76,7 +79,10 @@ def _build_session(auth_cookie_path: Optional[str] = None, auth_token: Optional[
             print(f"Warning: could not load auth cookies from {auth_cookie_path}: {e}")
             
     if auth_token:
+        print(f"DEBUG: Adding Authorization header with token: {auth_token[:10]}...")
         session.headers.update({"Authorization": f"Bearer {auth_token}"})
+    else:
+        print("DEBUG: NO auth_token provided to _build_session!")
 
     return session
 
@@ -132,6 +138,7 @@ class TranscribeUploader:
                 self._refresh_url,
                 headers={"Authorization": f"Bearer {current}"},
                 timeout=10,
+                verify=False,
             )
             if resp.status_code == 200:
                 new_token = resp.json().get("token")
@@ -231,7 +238,7 @@ def _register_session(server: str, source: str, auth_cookie_path: Optional[str] 
         headers["Authorization"] = f"Bearer {auth_token}"
 
     try:
-        response = requests.post(url, json={"source": source}, cookies=cookies, headers=headers, timeout=10)
+        response = requests.post(url, json={"source": source}, cookies=cookies, headers=headers, timeout=10, verify=False)
         # /session returns 201 Created on the REST server; older servers returned 200. Accept both.
         if response.status_code in (200, 201):
             payload = response.json()

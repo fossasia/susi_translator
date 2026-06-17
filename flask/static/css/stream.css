@@ -1,0 +1,406 @@
+/* =====================================================
+   STREAM PAGE LAYOUT
+   The entire page is a fixed-height layout so neither 
+   the video nor captions can ever push the page down.
+   ===================================================== */
+
+/* Remove global main padding only on stream page */
+main:has(.stream-page) {
+    padding: 0 !important;
+    min-height: unset !important;
+}
+
+.stream-page {
+    display: flex;
+    flex-direction: column;
+    padding: 16px 20px;
+    box-sizing: border-box;
+    gap: 12px;
+    /* Fill exactly the viewport below the 60px navbar */
+    height: calc(100vh - 60px);
+    overflow: hidden;
+    background: #f8faff;
+}
+
+/* Side-by-side row: video on left, captions on right.
+   flex: 1 + min-height: 0 means this row fills the remaining
+   height without pushing the page down */
+.stream-container {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: row;
+    gap: 20px;
+    overflow: hidden;
+}
+
+
+/* Header area */
+.stream-header {
+    flex: none;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 8px;
+    padding-bottom: 16px;
+    border-bottom: 2px solid #e8f0fe;
+}
+
+.room-info h2 {
+    margin: 0 0 6px 0;
+    color: #1a2340;
+    font-size: 1.5rem;
+    font-weight: 700;
+    letter-spacing: -0.3px;
+}
+
+.tenant-badge {
+    background-color: #f0f5ff;
+    padding: 4px 12px;
+    border-radius: 6px;
+    font-size: 0.8rem;
+    font-family: monospace;
+    font-weight: 600;
+    color: #4f8ef7;
+    border: 1px solid rgba(79,142,247,0.2);
+}
+
+/* Status Indicator */
+.status-indicator {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    background: #ffffff;
+    padding: 8px 18px;
+    border-radius: 99px;
+    border: 1.5px solid #d8e3f5;
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: #1a2340;
+    box-shadow: 0 2px 8px rgba(79,142,247,0.08);
+}
+
+.pulse-dot {
+    width: 10px;
+    height: 10px;
+    background-color: #f59e0b; /* Yellow for connecting */
+    border-radius: 50%;
+}
+
+.pulse-dot.connected {
+    background-color: #16a34a; /* Green for connected */
+    box-shadow: 0 0 0 3px rgba(22, 163, 74, 0.2);
+}
+
+.pulse-dot.error {
+    background-color: #dc2626; /* Red for error */
+}
+
+/* Left Column: Video Player */
+.video-wrapper {
+    flex: 6;
+    min-width: 0;
+    background-color: #f8faff;
+    border-radius: 12px;
+    overflow: hidden;
+    border: 1.5px solid #d8e3f5;
+    box-shadow: 0 12px 32px rgba(79,142,247,0.12);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+#yt-player,
+#mic-container {
+    width: 100%;
+    height: 100%;
+    border: none;
+}
+
+/* Right Column: Live Captions */
+.captions-wrapper {
+    flex: 3.5;
+    min-width: 0;
+    background-color: #ffffff;
+    border: 1.5px solid #d8e3f5;
+    border-radius: 12px;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    box-shadow: 0 12px 32px rgba(79,142,247,0.08);
+    min-height: 0;
+}
+
+.captions-header {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    padding: 14px 20px;
+    background-color: #f8faff;
+    border-bottom: 1.5px solid #d8e3f5;
+    gap: 12px;
+}
+
+.captions-header h3 {
+    margin: 0;
+    font-size: 1.05rem;
+    font-weight: 700;
+    color: #1a2340;
+}
+
+.captions-controls {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.lang-selector-group {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.lang-selector-group label {
+    font-size: 0.82rem;
+    font-weight: 600;
+    color: #5a6a8a;
+    white-space: nowrap;
+}
+
+.lang-selector-group select {
+    font-family: 'Inter', Arial, sans-serif;
+    font-size: 0.85rem;
+    font-weight: 500;
+    color: #1a2340;
+    background-color: #fff;
+    border: 1.5px solid #d8e3f5;
+    border-radius: 8px;
+    padding: 5px 10px;
+    cursor: pointer;
+    outline: none;
+    transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.lang-selector-group select:focus {
+    border-color: #4f8ef7;
+    box-shadow: 0 0 0 3px rgba(79, 142, 247, 0.15);
+}
+
+
+.secondary-btn {
+    background-color: transparent;
+    border: 1.5px solid #d8e3f5;
+    color: #5a6a8a;
+    padding: 6px 10px;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 0.85rem;
+    font-weight: 600;
+    font-family: 'Inter', Arial, sans-serif;
+    transition: all 0.15s;
+    text-decoration: none;
+    white-space: nowrap;
+}
+
+.secondary-btn:hover {
+    background-color: #f0f5ff;
+    border-color: #b8ccf0;
+    color: #4f8ef7;
+}
+
+/* Toggle Switch Styles */
+.audio-toggle-wrapper {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background-color: #ffffff;
+    border: 1.5px solid #d8e3f5;
+    padding: 4px 10px;
+    border-radius: 8px;
+}
+
+#audio-toggle-label {
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: #5a6a8a;
+    font-family: 'Inter', Arial, sans-serif;
+    min-width: 85px;
+}
+
+.switch {
+    position: relative;
+    display: inline-block;
+    width: 36px;
+    height: 20px;
+}
+
+.switch input { 
+    opacity: 0;
+    width: 0;
+    height: 0;
+}
+
+.slider {
+    position: absolute;
+    cursor: pointer;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-color: #cbd5e1;
+    transition: .3s;
+}
+
+.slider:before {
+    position: absolute;
+    content: "";
+    height: 14px;
+    width: 14px;
+    left: 3px;
+    bottom: 3px;
+    background-color: white;
+    transition: .3s;
+}
+
+input:checked + .slider {
+    background-color: #16a34a;
+}
+
+input:checked + .slider:before {
+    transform: translateX(16px);
+}
+
+.slider.round {
+    border-radius: 34px;
+}
+
+.slider.round:before {
+    border-radius: 50%;
+}
+
+.captions-box {
+    width: 100%;
+    padding: 20px;
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    font-family: 'Inter', Arial, sans-serif;
+    font-size: 1.05rem;
+    line-height: 1.6;
+    box-sizing: border-box;
+}
+
+/* Mobile: stack video on top, captions below with fixed height */
+@media (max-width: 900px) {
+    .stream-page {
+        height: auto;
+        overflow: auto;
+    }
+    .stream-container {
+        flex-direction: column;
+    }
+    .video-wrapper {
+        flex: none;
+        aspect-ratio: 16 / 9;
+        width: 100%;
+    }
+    .captions-wrapper {
+        flex: none;
+        height: 380px;
+    }
+}
+
+.system-msg {
+    color: #5a6a8a;
+    font-style: italic;
+    text-align: center;
+    margin-top: 40px;
+    font-size: 0.95rem;
+}
+
+/* Individual caption blocks */
+.caption-block {
+    margin-bottom: 14px;
+    padding-bottom: 14px;
+    border-bottom: 1px solid #e8f0fe;
+    animation: fadeIn 0.3s ease-out;
+}
+
+.caption-block:last-child {
+    border-bottom: none;
+    margin-bottom: 0;
+    padding-bottom: 0;
+}
+
+.transcript-text {
+    color: #5a6a8a; 
+    margin: 0 0 6px 0;
+    font-size: 0.95rem;
+}
+
+.translation-text {
+    color: #1a2340; 
+    font-weight: 600;
+    margin: 0;
+    font-size: 1.05rem;
+}
+
+/* Scrollbar styling for captions box */
+.captions-box::-webkit-scrollbar {
+    width: 8px;
+}
+.captions-box::-webkit-scrollbar-track {
+    background: #f8faff; 
+}
+.captions-box::-webkit-scrollbar-thumb {
+    background: #cddbfa; 
+    border-radius: 4px;
+}
+.captions-box::-webkit-scrollbar-thumb:hover {
+    background: #a9c1f7; 
+}
+
+/* Entry Animation */
+@keyframes fadeIn {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+/* Web Microphone Visualizer */
+#mic-container {
+    justify-content: center;
+    align-items: center;
+    width: 100%;
+    height: 100%;
+    background: #f8faff;
+    position: relative;
+    overflow: hidden;
+}
+
+.mic-icon {
+    font-size: 80px;
+    z-index: 10;
+    background: #ffffff;
+    width: 150px;
+    height: 150px;
+    border-radius: 50%;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    box-shadow: 0 4px 15px rgba(79,142,247,0.3);
+}
+
+.mic-wave {
+    position: absolute;
+    border-radius: 50%;
+    background: rgba(79, 142, 247, 0.4);
+    transform: translate(-50%, -50%) scale(0.5);
+    left: 50%;
+    top: 50%;
+    pointer-events: none;
+    transition: transform 0.1s linear, opacity 0.1s linear;
+    width: 150px;
+    height: 150px;
+    opacity: 0;
+}
