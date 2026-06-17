@@ -1,0 +1,118 @@
+{% extends "base.html" %}
+
+{% block title %}SUSI Translator - Live Stream{% endblock %}
+
+{% block head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/stream.css') }}?v=11" />
+<style>
+  /* Inline fallback: zero out main padding directly so layout is locked */
+  main { padding: 0 !important; min-height: unset !important; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="stream-page">
+    
+    <div class="stream-header">
+        <div class="room-info">
+            <h2>Event Room</h2>
+            <span class="badge tenant-badge">ID: {{ tenant_id }}</span>
+        </div>
+        
+        <div class="header-actions">
+            <a href="/home" class="secondary-btn">← Back to Dashboard</a>
+        </div>
+
+        <div class="status-indicator">
+            <span class="pulse-dot" id="dot"></span>
+            <span id="connection-status">Connecting...</span>
+        </div>
+    </div>
+
+    <div class="stream-container">
+
+        <div class="video-wrapper">
+            <iframe 
+                id="yt-player"
+                src="" 
+                frameborder="0" 
+                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" 
+                allowfullscreen>
+            </iframe>
+            <div id="mic-container" style="display: none;">
+                <div class="mic-wave" id="mic-wave-1"></div>
+                <div class="mic-wave" id="mic-wave-2"></div>
+                <div class="mic-icon" id="mic-icon-btn" style="cursor: pointer;">
+                    <img src="{{ url_for('static', filename='img/microphone.png') }}" alt="Mic" style="width: 80px; height: 80px; object-fit: contain;">
+                </div>
+                <div id="mic-prompt" style="position: absolute; bottom: 20px; font-weight: bold; color: #4f8ef7; background: white; padding: 5px 10px; border-radius: 5px;">Click mic to start</div>
+            </div>
+        </div>
+
+        <div class="captions-wrapper">
+            <div class="captions-header">
+                <h3>Real Time Transcript</h3>
+                <div class="captions-controls">
+                    <div class="lang-selector-group">
+                        <label for="viewer-lang-select">My Language</label>
+                        <select id="viewer-lang-select">
+                            <option value="">Original</option>
+                            <option value="en">English</option>
+                            <option value="de">German</option>
+                            <option value="fr">French</option>
+                            <option value="es">Spanish</option>
+                            <option value="hi">Hindi</option>
+                            <option value="zh">Chinese</option>
+                            <option value="ar">Arabic</option>
+                            <option value="pt">Portuguese</option>
+                            <option value="ru">Russian</option>
+                            <option value="ja">Japanese</option>
+                            <option value="ko">Korean</option>
+                            <option value="it">Italian</option>
+                        </select>
+                    </div>
+                    <div class="audio-toggle-wrapper">
+                        <label class="switch">
+                            <input type="checkbox" id="audio-toggle-checkbox">
+                            <span class="slider round"></span>
+                        </label>
+                        <span id="audio-toggle-label">Muted</span>
+                    </div>
+                    <button id="download-btn" class="secondary-btn">Notes</button>
+                </div>
+            </div>
+            
+            <div id="captions-box" class="captions-box">
+                <p class="system-msg">Waiting for audio stream to begin...</p>
+            </div>
+        </div>
+
+    </div>
+
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    const TENANT_ID = "{{ tenant_id }}";
+    const VIDEO_URL = "{{ video_url }}";
+    const STREAM_TYPE = "{{ stream_type }}";
+
+    // Navigation Fix & Ghost Room Protection
+    window.onload = function() {
+        // 1. If the room was deleted, kick the user out (prevents ghost rooms via browser back button)
+        const rooms = JSON.parse(localStorage.getItem('susi_rooms') || '[]');
+        if (!rooms.some(r => r.tenant_id === TENANT_ID)) {
+            window.location.replace('/home');
+            return;
+        }
+
+        // 2. Remove "Config" page from history stack
+        history.replaceState(null, '', window.location.href);
+    };
+</script>
+<script src="{{ url_for('static', filename='js/stream.js') }}?v=11"></script>
+{% if stream_type == 'mic' %}
+<script src="{{ url_for('static', filename='js/web_mic.js') }}?v=6"></script>
+{% endif %}
+{% endblock %}

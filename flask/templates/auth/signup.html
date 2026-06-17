@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Sign Up – SUSI Translator</title>
+  <meta name="description" content="Create a free SUSI Translator organizer account." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --blue:       #4f8ef7;
+      --blue-dark:  #3a74e0;
+      --blue-deep:  #2a5dc8;
+      --blue-light: #e8f0fe;
+      --blue-soft:  #f4f7ff;
+      --white:      #ffffff;
+      --text:       #1a2340;
+      --text-muted: #5a6a8a;
+      --border:     #d8e3f5;
+      --error:      #dc2626;
+      --success:    #16a34a;
+      --radius:     12px;
+    }
+
+    body {
+      font-family: 'Inter', sans-serif;
+      background: var(--blue-soft);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      align-items: stretch;
+    }
+
+    /* ---- Left panel ---- */
+    .auth-left {
+      display: none;
+      flex: 1;
+      background: linear-gradient(145deg, var(--blue) 0%, var(--blue-deep) 100%);
+      align-items: center;
+      justify-content: center;
+      flex-direction: column;
+      gap: 20px;
+      padding: 48px;
+      color: white;
+    }
+    @media (min-width: 900px) { .auth-left { display: flex; } }
+
+    .auth-left h2 { font-size: 2rem; font-weight: 800; letter-spacing: -0.5px; }
+    .auth-left p  { font-size: 1rem; opacity: 0.85; text-align: center; max-width: 300px; line-height: 1.6; }
+
+    .auth-left-steps {
+      list-style: none; margin-top: 12px;
+      display: flex; flex-direction: column; gap: 14px;
+    }
+    .auth-left-steps li {
+      display: flex; align-items: flex-start; gap: 12px;
+      font-size: 0.88rem; opacity: 0.9; line-height: 1.4;
+    }
+    .step-num {
+      width: 24px; height: 24px; min-width: 24px;
+      background: rgba(255,255,255,0.2);
+      border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 0.75rem; font-weight: 700;
+    }
+
+    /* ---- Right panel ---- */
+    .auth-right {
+      flex: 0 0 auto;
+      width: 100%;
+      max-width: 500px;
+      background: var(--white);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 48px 40px;
+    }
+    @media (max-width: 899px) { .auth-right { max-width: 100%; } }
+
+    .auth-form-wrap {
+      width: 100%; max-width: 380px;
+      animation: fadeIn 0.35s ease;
+    }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
+
+    /* ---- Logo ---- */
+    .auth-logo { display: flex; align-items: center; gap: 10px; margin-bottom: 32px; }
+    .auth-logo-text { font-size: 1.1rem; font-weight: 700; color: var(--text); }
+    .auth-logo-text span { color: var(--blue); }
+
+    .auth-heading { font-size: 1.6rem; font-weight: 800; letter-spacing: -0.5px; margin-bottom: 6px; }
+    .auth-subtext { font-size: 0.88rem; color: var(--text-muted); margin-bottom: 26px; }
+
+    /* ---- Form ---- */
+    .form-group { margin-bottom: 16px; }
+
+    label {
+      display: block;
+      font-size: 0.8rem; font-weight: 600;
+      color: var(--text-muted);
+      text-transform: uppercase; letter-spacing: 0.6px;
+      margin-bottom: 7px;
+    }
+
+    input[type="email"],
+    input[type="password"],
+    input[type="text"] {
+      width: 100%;
+      padding: 11px 14px;
+      background: var(--blue-soft);
+      border: 1.5px solid var(--border);
+      border-radius: var(--radius);
+      color: var(--text);
+      font-size: 0.95rem;
+      font-family: 'Inter', sans-serif;
+      outline: none;
+      transition: border-color 0.15s, box-shadow 0.15s, background 0.15s;
+    }
+    input:focus {
+      border-color: var(--blue);
+      box-shadow: 0 0 0 3px rgba(79,142,247,0.15);
+      background: var(--white);
+    }
+    input::placeholder { color: #b0bbcc; }
+
+    /* ---- Password strength ---- */
+    .strength-bar-wrap {
+      margin-top: 8px; height: 4px;
+      background: var(--border); border-radius: 99px; overflow: hidden;
+    }
+    .strength-bar {
+      height: 100%; width: 0%;
+      border-radius: 99px;
+      transition: width 0.3s ease, background 0.3s ease;
+    }
+    .strength-label { font-size: 0.74rem; margin-top: 4px; min-height: 14px; color: var(--text-muted); }
+
+    /* ---- Button ---- */
+    .btn-primary {
+      width: 100%; padding: 13px;
+      background: var(--blue); color: white; border: none;
+      border-radius: var(--radius);
+      font-size: 0.95rem; font-weight: 700;
+      font-family: 'Inter', sans-serif; cursor: pointer;
+      transition: background 0.15s, box-shadow 0.15s, transform 0.12s;
+      box-shadow: 0 4px 16px rgba(79,142,247,0.35);
+      margin-top: 6px;
+    }
+    .btn-primary:hover:not(:disabled) {
+      background: var(--blue-dark);
+      box-shadow: 0 6px 20px rgba(79,142,247,0.45);
+      transform: translateY(-1px);
+    }
+    .btn-primary:active:not(:disabled) { transform: translateY(0); }
+    .btn-primary:disabled { opacity: 0.55; cursor: not-allowed; box-shadow: none; }
+
+    .msg { margin-top: 14px; font-size: 0.875rem; text-align: center; min-height: 20px; }
+    .msg.error   { color: var(--error); }
+    .msg.success { color: var(--success); }
+
+    .divider { height: 1px; background: var(--border); margin: 22px 0; }
+
+    .auth-footer { text-align: center; font-size: 0.875rem; color: var(--text-muted); }
+    .auth-footer a { color: var(--blue); text-decoration: none; font-weight: 600; }
+    .auth-footer a:hover { text-decoration: underline; }
+
+    .spinner {
+      display: inline-block; width: 14px; height: 14px;
+      border: 2px solid rgba(255,255,255,0.4); border-top-color: white;
+      border-radius: 50%; animation: spin 0.6s linear infinite;
+      vertical-align: middle; margin-right: 7px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+
+<!-- Left branding panel -->
+<div class="auth-left">
+  <h2>Get Started Free</h2>
+  <p>Create your organizer account and go live in minutes.</p>
+  <ul class="auth-left-steps">
+    <li><span class="step-num">1</span> Create your account</li>
+    <li><span class="step-num">2</span> Set up a transcription room</li>
+    <li><span class="step-num">3</span> Start your live session</li>
+  </ul>
+</div>
+
+<!-- Right form panel -->
+<div class="auth-right">
+  <div class="auth-form-wrap">
+
+    <div class="auth-logo">
+      <div class="auth-logo-text">SUSI <span>Translator</span></div>
+    </div>
+
+    <h1 class="auth-heading">Create account</h1>
+    <p class="auth-subtext">Free forever. No credit card required.</p>
+
+    <div class="form-group">
+      <label for="name">Name <span style="font-weight:400;text-transform:none;font-size:.85em;color:#9ba8c0">(optional)</span></label>
+      <input type="text" id="name" placeholder="Your name" autocomplete="name" />
+    </div>
+
+    <div class="form-group">
+      <label for="email">Email address</label>
+      <input type="email" id="email" placeholder="you@example.com" autocomplete="email" />
+    </div>
+
+    <div class="form-group">
+      <label for="password">Password</label>
+      <input type="password" id="password" placeholder="Minimum 8 characters"
+             autocomplete="new-password" oninput="updateStrength(this.value)" />
+      <div class="strength-bar-wrap"><div class="strength-bar" id="strengthBar"></div></div>
+      <div class="strength-label" id="strengthLabel"></div>
+    </div>
+
+    <button class="btn-primary" type="button" id="signupBtn" onclick="doSignup()">Create Account</button>
+
+    <p class="msg" id="msg" role="alert" aria-live="polite"></p>
+
+    <div class="divider"></div>
+    <div class="auth-footer">Already have an account? <a href="/auth/login">Sign in →</a></div>
+
+  </div>
+</div>
+
+<script>
+  function updateStrength(pw) {
+    const bar   = document.getElementById("strengthBar");
+    const label = document.getElementById("strengthLabel");
+    let score = 0;
+    if (pw.length >= 8)  score++;
+    if (pw.length >= 12) score++;
+    if (/[A-Z]/.test(pw)) score++;
+    if (/[0-9]/.test(pw)) score++;
+    if (/[^A-Za-z0-9]/.test(pw)) score++;
+
+    const levels = [
+      { pct: "0%",   color: "transparent", text: "" },
+      { pct: "25%",  color: "#ef4444",     text: "Weak" },
+      { pct: "50%",  color: "#f59e0b",     text: "Fair" },
+      { pct: "75%",  color: "#4f8ef7",     text: "Good" },
+      { pct: "100%", color: "#16a34a",     text: "Strong" },
+    ];
+    const lv = levels[Math.min(score, 4)];
+    bar.style.width      = lv.pct;
+    bar.style.background = lv.color;
+    label.textContent    = lv.text;
+    label.style.color    = lv.color;
+  }
+
+  document.addEventListener("keydown", function(e) {
+    if (e.key === "Enter") doSignup();
+  });
+
+  async function doSignup() {
+    const name     = document.getElementById("name").value.trim();
+    const email    = document.getElementById("email").value.trim();
+    const password = document.getElementById("password").value;
+    const btn      = document.getElementById("signupBtn");
+
+    showMsg("", "");
+    if (!email)              { showMsg("Email is required.", "error"); return; }
+    if (password.length < 8) { showMsg("Password must be at least 8 characters.", "error"); return; }
+
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span>Creating account…';
+
+    try {
+      const res  = await fetch("/auth/api/signup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, email, password }),
+        credentials: "same-origin",
+      });
+      const data = await res.json();
+
+      if (res.ok) {
+        showMsg("Account created! Redirecting…", "success");
+        setTimeout(() => { window.location.href = "/home"; }, 500);
+      } else {
+        showMsg(data.message || "Signup failed. Please try again.", "error");
+        resetBtn();
+      }
+    } catch (_) {
+      showMsg("Network error — please check your connection.", "error");
+      resetBtn();
+    }
+  }
+
+  function showMsg(text, type) {
+    const el = document.getElementById("msg");
+    el.textContent = text;
+    el.className = "msg" + (type ? " " + type : "");
+  }
+  function resetBtn() {
+    const btn = document.getElementById("signupBtn");
+    btn.disabled = false;
+    btn.textContent = "Create Account";
+  }
+</script>
+</body>
+</html>
