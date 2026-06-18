@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import logging
 import os
 import struct
 import sys
@@ -25,7 +26,10 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from urllib3.exceptions import MaxRetryError
 import urllib3
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+VERIFY_SSL = os.environ.get("FLASK_SSL_VERIFY", "True").lower() in ("1", "true", "yes", "on")
+if not VERIFY_SSL:
+    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 from audio_sources import (
     AudioSource,
@@ -45,6 +49,7 @@ SILENCE_THRESHOLD: int = 500
 DEFAULT_SERVER: str = "http://localhost:5040"
 VALID_SOURCES = ("mic", "file", "url", "stdin", "youtube")
 
+logger = logging.getLogger(__name__)
 
 
 def _is_silent(pcm_bytes: bytes) -> bool: # Return True if the loudest sample in ``pcm_bytes`` is below ``SILENCE_THRESHOLD``.
@@ -66,7 +71,7 @@ def _build_session(auth_cookie_path: Optional[str] = None, auth_token: Optional[
     )
     adapter = HTTPAdapter(max_retries=retry_policy)
     session = requests.Session()
-    session.verify = False
+    session.verify = VERIFY_SSL
     session.mount("http://", adapter)
     session.mount("https://", adapter)
     
@@ -76,13 +81,13 @@ def _build_session(auth_cookie_path: Optional[str] = None, auth_token: Optional[
             cj.load(ignore_discard=True, ignore_expires=True)
             session.cookies.update(cj)
         except Exception as e:
-            print(f"Warning: could not load auth cookies from {auth_cookie_path}: {e}")
+            logger.warning(f"could not load auth cookies from {auth_cookie_path}: {e}")
             
     if auth_token:
-        print(f"DEBUG: Adding Authorization header with token: {auth_token[:10]}...")
+        logger.debug("Adding Authorization header with token")
         session.headers.update({"Authorization": f"Bearer {auth_token}"})
     else:
-        print("DEBUG: NO auth_token provided to _build_session!")
+        logger.debug("NO auth_token provided to _build_session!")
 
     return session
 
@@ -138,7 +143,7 @@ class TranscribeUploader:
                 self._refresh_url,
                 headers={"Authorization": f"Bearer {current}"},
                 timeout=10,
-                verify=False,
+                verify=VERIFY_SSL,
             )
             if resp.status_code == 200:
                 new_token = resp.json().get("token")
@@ -238,7 +243,7 @@ def _register_session(server: str, source: str, auth_cookie_path: Optional[str] 
         headers["Authorization"] = f"Bearer {auth_token}"
 
     try:
-        response = requests.post(url, json={"source": source}, cookies=cookies, headers=headers, timeout=10, verify=False)
+        response = requests.post(url, json={"source": source}, cookies=cookies, headers=headers, timeout=10, verify=VERIFY_SSL)
         # /session returns 201 Created on the REST server; older servers returned 200. Accept both.
         if response.status_code in (200, 201):
             payload = response.json()

@@ -1,5 +1,16 @@
-// Stored in localStorage so they persist on refresh
-let rooms = JSON.parse(localStorage.getItem('susi_rooms') || '[]');
+let rooms = [];
+
+async function fetchRooms() {
+    try {
+        const res = await fetch('/api/v1/translate/rooms', { credentials: 'same-origin' });
+        if (res.ok) {
+            rooms = await res.json();
+            renderRooms();
+        }
+    } catch (e) {
+        console.error("Failed to fetch rooms", e);
+    }
+}
 
 function renderRooms() {
     const grid = document.getElementById('rooms-grid');
@@ -46,7 +57,6 @@ function renderRooms() {
 
 function openRoom(event, tenant_id) {
     event.stopPropagation();
-    let rooms = JSON.parse(localStorage.getItem('susi_rooms') || '[]');
     let room = rooms.find(r => r.tenant_id === tenant_id);
     if (room && room.configured && room.streamType === 'mic') {
         window.location.href = `/stream/${tenant_id}?url=&type=mic`;
@@ -88,15 +98,14 @@ async function submitRoom() {
         const response = await fetch('/session', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ source: 'youtube' }),
+            body: JSON.stringify({ source: 'youtube', name: name }),
             credentials: 'same-origin',
         });
 
         const data = await response.json();
         const tenant_id = data.tenant_id;
 
-        rooms.push({ name, tenant_id });
-        localStorage.setItem('susi_rooms', JSON.stringify(rooms));
+        rooms.push({ name, tenant_id, configured: false });
 
         closeModal();
         renderRooms();
@@ -123,7 +132,6 @@ async function deleteRoom(event, tenant_id) {
     }
     
     rooms = rooms.filter(r => r.tenant_id !== tenant_id);
-    localStorage.setItem('susi_rooms', JSON.stringify(rooms));
     renderRooms();
 }
 
@@ -142,5 +150,5 @@ function escapeHtml(str) {
     return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
-// Render on load
-renderRooms();
+// Fetch and render on load
+fetchRooms();

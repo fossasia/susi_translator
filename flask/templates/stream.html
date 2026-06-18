@@ -99,12 +99,19 @@
     const STREAM_TYPE = "{{ stream_type }}";
 
     // Navigation Fix & Ghost Room Protection
-    window.onload = function() {
-        // 1. If the room was deleted, kick the user out (prevents ghost rooms via browser back button)
-        const rooms = JSON.parse(localStorage.getItem('susi_rooms') || '[]');
-        if (!rooms.some(r => r.tenant_id === TENANT_ID)) {
-            window.location.replace('/home');
-            return;
+    window.onload = async function() {
+        //If the room was deleted, kick the user out (prevents ghost rooms via browser back button)
+        try {
+            const res = await fetch('/api/v1/translate/rooms', { credentials: 'same-origin' });
+            if (res.ok) {
+                const rooms = await res.json();
+                if (!rooms.some(r => r.tenant_id === TENANT_ID)) {
+                    window.location.replace('/home');
+                    return;
+                }
+            }
+        } catch (e) {
+            console.error("Failed to check room existence", e);
         }
 
         // 2. Remove "Config" page from history stack

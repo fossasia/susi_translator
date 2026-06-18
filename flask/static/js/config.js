@@ -99,16 +99,23 @@ function _maskKeyField(inputEl) {
     });
 }
 
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
     // Auto-redirect if the room was already configured (e.g. user pressed back button)
     // unless they explicitly arrived here via the Edit button.
     const urlParams = new URLSearchParams(window.location.search);
     if (!urlParams.has('edit')) {
-        let rooms = JSON.parse(localStorage.getItem('susi_rooms') || '[]');
-        let room = rooms.find(r => r.tenant_id === TENANT_ID);
-        if (room && room.configured) {
-            window.location.replace(`/stream/${TENANT_ID}?url=${encodeURIComponent(room.videoUrl || '')}&type=${room.streamType || 'youtube'}`);
-            return;
+        try {
+            const res = await fetch('/api/v1/translate/rooms', { credentials: 'same-origin' });
+            if (res.ok) {
+                const rooms = await res.json();
+                const room = rooms.find(r => r.tenant_id === TENANT_ID);
+                if (room && room.configured) {
+                    window.location.replace(`/stream/${TENANT_ID}?url=${encodeURIComponent(room.videoUrl || '')}&type=${room.streamType || 'youtube'}`);
+                    return;
+                }
+            }
+        } catch (e) {
+            console.error("Failed to fetch rooms config check", e);
         }
     }
 
@@ -223,16 +230,6 @@ document.getElementById('config-form').addEventListener('submit', async (e) => {
             if (data.pipeline_ready === true) {
                 document.getElementById('loading-title').innerText = "Models Ready!";
                 document.getElementById('loading-subtitle').innerText = "Entering Stream Room...";
-                let rooms = JSON.parse(localStorage.getItem('susi_rooms') || '[]');
-                rooms = rooms.map(r => {
-                    if (r.tenant_id === TENANT_ID) {
-                        r.configured = true;
-                        r.videoUrl = streamUrl;
-                        r.streamType = streamType;
-                    }
-                    return r;
-                });
-                localStorage.setItem('susi_rooms', JSON.stringify(rooms));
                 setTimeout(() => {
                     window.location.replace(`/stream/${TENANT_ID}?url=${encodeURIComponent(streamUrl)}&type=${streamType}`);
                 }, 400);
@@ -251,16 +248,6 @@ document.getElementById('config-form').addEventListener('submit', async (e) => {
                     document.getElementById('loading-subtitle').innerText = "Entering Stream Room...";
                     // Redirect anyway — models may be ready even if status returned slow
                     setTimeout(() => {
-                        let rooms = JSON.parse(localStorage.getItem('susi_rooms') || '[]');
-                        rooms = rooms.map(r => {
-                            if (r.tenant_id === TENANT_ID) {
-                                r.configured = true;
-                                r.videoUrl = streamUrl;
-                                r.streamType = streamType;
-                            }
-                            return r;
-                        });
-                        localStorage.setItem('susi_rooms', JSON.stringify(rooms));
                         window.location.replace(`/stream/${TENANT_ID}?url=${encodeURIComponent(streamUrl)}&type=${streamType}`);
                     }, 500);
                     return;
@@ -277,17 +264,6 @@ document.getElementById('config-form').addEventListener('submit', async (e) => {
                         document.getElementById('loading-title').innerText = "Models Loaded!";
                         document.getElementById('loading-subtitle').innerText = "Entering Stream Room...";
                         setTimeout(() => {
-                            let rooms = JSON.parse(localStorage.getItem('susi_rooms') || '[]');
-                            rooms = rooms.map(r => {
-                                if (r.tenant_id === TENANT_ID) {
-                                    r.configured = true;
-                                    r.videoUrl = streamUrl;
-                                    r.streamType = streamType;
-                                }
-                                return r;
-                            });
-                            localStorage.setItem('susi_rooms', JSON.stringify(rooms));
-
                             window.location.replace(`/stream/${TENANT_ID}?url=${encodeURIComponent(streamUrl)}&type=${streamType}`);
                         }, 500);
                     }

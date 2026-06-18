@@ -563,13 +563,22 @@ def _session_logic(success_status: int = 200):
         from flask_jwt_extended import verify_jwt_in_request, get_jwt_identity
         from flask_jwt_extended.exceptions import JWTExtendedException
         from jwt.exceptions import PyJWTError
-        from auth.models import Organizer
+        from auth.models import Organizer, Room, db
         verify_jwt_in_request(optional=True)
         email = get_jwt_identity()
         if email:
             organizer = Organizer.query.filter_by(email=email).first()
             if organizer:
                 registry.claim(new_tenant_id, organizer.id)
+                room_name = data.get('name', 'Unnamed Room')
+                new_room = Room(
+                    tenant_id=new_tenant_id,
+                    name=room_name,
+                    organizer_id=organizer.id,
+                    source=source
+                )
+                db.session.add(new_room)
+                db.session.commit()
     except (JWTExtendedException, PyJWTError):
         pass  
 
@@ -806,11 +815,18 @@ def configure_provider():
 
     try:
         from flask_jwt_extended import get_jwt_identity
-        from auth.models import Organizer
+        from auth.models import Organizer, Room, db
         email = get_jwt_identity()
         organizer = None
         if email:
             organizer = Organizer.query.filter_by(email=email).first()
+
+            room = Room.query.get(tenant_id)
+            if room:
+                room.configured = True
+                room.stream_type = data.get('stream_type')
+                room.stream_url = data.get('stream_url')
+                db.session.commit()
 
         registry.configure(
             tenant_id=tenant_id,
@@ -1002,6 +1018,30 @@ def translate_stream():
 
 # Tenant lifecycle endpoints
 
+@app.route('/api/v1/translate/rooms', methods=['GET'])
+@organizer_required
+def get_rooms():
+    from flask_jwt_extended import get_jwt_identity
+    from auth.models import Organizer, Room
+    email = get_jwt_identity()
+    if not email:
+        return jsonify([]), 200
+    organizer = Organizer.query.filter_by(email=email).first()
+    if not organizer:
+        return jsonify([]), 200
+    
+    rooms = Room.query.filter_by(organizer_id=organizer.id).all()
+    room_data = []
+    for r in rooms:
+        room_data.append({
+            "tenant_id": r.tenant_id,
+            "name": r.name,
+            "configured": r.configured,
+            "streamType": r.stream_type,
+            "videoUrl": r.stream_url
+        })
+    return jsonify(room_data), 200
+
 @app.route('/stop_event/<tenant_id>', methods=['POST'])
 @organizer_required
 def stop_event(tenant_id):
@@ -1020,6 +1060,15 @@ def stop_event(tenant_id):
 
     with transcripts_lock:
         transcriptd.pop(tenant_id, None)
+
+    try:
+        from auth.models import Room, db
+        room = Room.query.get(tenant_id)
+        if room:
+            db.session.delete(room)
+            db.session.commit()
+    except Exception as e:
+        logger.error(f"Error deleting room {tenant_id} from DB: {e}")
 
     return jsonify({"status": "success", "message": f"Event {tenant_id} stopped"}), 200
 
