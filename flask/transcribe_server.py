@@ -606,7 +606,7 @@ def _transcribe_logic(success_status: int = 202):
         claims = get_jwt()
     except (JWTExtendedException, PyJWTError) as exc:
         logger.warning(f"Auth failed for /transcripts: {exc.__class__.__name__}: {exc}")
-        logger.debug(f"Incoming headers: {dict(request.headers)}")
+        logger.debug(f"Incoming header names: {list(request.headers.keys())}")
         return {"error": "Authentication required.", "status": "error"}, 401
 
     if claims.get("role") == "internal":
@@ -789,6 +789,28 @@ def _transcripts_size_logic():
     t = {k: v for k, v in t.items() if _in_chunk_range(k, fromid, untilid)}
     return {'size': len(t)}
 
+UPLOAD_FOLDER = os.path.abspath(os.path.join('instance', 'uploads'))
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+
+@app.route('/api/v1/translate/upload_file', methods=['POST'])
+@organizer_required
+def upload_file():
+    if 'audio_file' not in request.files:
+        return jsonify({"status": "error", "message": "No audio_file provided"}), 400
+    
+    file = request.files['audio_file']
+    if file.filename == '':
+        return jsonify({"status": "error", "message": "No selected file"}), 400
+        
+    if file:
+        from werkzeug.utils import secure_filename
+        import uuid
+        filename = secure_filename(file.filename)
+        safe_name = f"{uuid.uuid4().hex}_{filename}"
+        filepath = os.path.join(UPLOAD_FOLDER, safe_name)
+        file.save(filepath)
+        return jsonify({"status": "success", "file_path": filepath}), 200
+
 #Provider configuration endpoint
 @app.route('/api/v1/translate/configure', methods=['POST'])
 @organizer_required
@@ -840,6 +862,30 @@ def configure_provider():
         if translation:
             configured.append(f"translation='{translation.get('provider_name')}'")
 
+        stream_url = data.get("stream_url")
+        source_type = data.get("source_type", "youtube")
+
+        if stream_url:
+            if source_type == "youtube":
+                YouTubeSource._validate_url(stream_url)
+            elif source_type == "url":
+                if not organizer or not organizer.is_admin:
+                    return jsonify({"status": "error", "message": "Only admins can provide direct stream URLs."}), 403
+                URLSource._validate_url(stream_url)
+            elif source_type == "file":
+                if not os.path.exists(stream_url):
+                    return jsonify({"status": "error", "message": "File not found"}), 400
+                if not stream_url.startswith(UPLOAD_FOLDER):
+                    return jsonify({"status": "error", "message": "Invalid file path"}), 403
+            else:
+                return jsonify({
+                    "status": "error",
+                    "message": (
+                        f"Unknown source_type {source_type!r}. "
+                        "Must be 'youtube', 'url', or 'file'."
+                    ),
+                }), 400
+
         # Always kill any existing grabber for this tenant before applying new config.
         # This prevents a URL grabber from leaking if the user switches to Microphone.
         with grabber_lock:
@@ -847,7 +893,6 @@ def configure_provider():
         if old_proc:
             _kill_grabber(old_proc, tenant_id)
 
-        stream_url = data.get("stream_url")
         if stream_url:
             from flask_jwt_extended import create_access_token
 
@@ -856,23 +901,6 @@ def configure_provider():
                 expires_delta=_INTERNAL_TOKEN_EXPIRY,
                 additional_claims={"role": "internal", "tenant_id": tenant_id},
             )
-        
-            source_type = data.get("source_type", "youtube")
-
-            if source_type == "youtube":
-                YouTubeSource._validate_url(stream_url)
-            elif source_type == "url":
-                if not organizer or not organizer.is_admin:
-                    return jsonify({"status": "error", "message": "Only admins can provide direct stream URLs."}), 403
-                URLSource._validate_url(stream_url)
-            else:
-                return jsonify({
-                    "status": "error",
-                    "message": (
-                        f"Unknown source_type {source_type!r}. "
-                        "Must be 'youtube' or 'url'."
-                    ),
-                }), 400
 
             logger.info(
                 f"Spawning audio_grabber for tenant {tenant_id} "
