@@ -19,18 +19,36 @@ services:
 
   nginx:
     build:
-      context: ./nginx
+      context: ./deployment/nginx
       dockerfile: Dockerfile.nginx
     container_name: susi_nginx
     restart: always
+    env_file:
+      - .env
     ports:
       - "80:80"
       - "443:443"
     volumes:
-      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./deployment/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
       - ./static:/app/static:ro
+      - certbot_certs:/etc/letsencrypt
     depends_on:
       - web
+    networks:
+      - susi_net
+
+  certbot:
+    image: alpine:latest
+    container_name: susi_certbot
+    restart: always
+    env_file:
+      - .env
+    volumes:
+      - ./deployment/certbot:/opt/certbot
+      - certbot_certs:/etc/letsencrypt
+    entrypoint: ["/bin/sh", "-c", "apk add --no-cache certbot curl && /bin/sh /opt/certbot/entrypoint.sh"]
+    depends_on:
+      - nginx
     networks:
       - susi_net
 
@@ -42,3 +60,4 @@ networks:
 
 volumes:
   model_cache:
+  certbot_certs:
