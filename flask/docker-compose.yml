@@ -1,0 +1,44 @@
+
+services:
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: susi_flask_app
+    container_name: susi_web
+    restart: always
+    env_file:
+      - .env
+    volumes:
+      - ./instance:/app/instance
+      - model_cache:/root/.cache
+    expose:
+      - "5040"
+    networks:
+      - susi_net
+
+  nginx:
+    build:
+      context: ./nginx
+      dockerfile: Dockerfile.nginx
+    container_name: susi_nginx
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./static:/app/static:ro
+    depends_on:
+      - web
+    networks:
+      - susi_net
+
+networks:
+  susi_net:
+    driver: bridge
+    driver_opts:
+      com.docker.network.driver.mtu: 1350
+
+volumes:
+  model_cache:

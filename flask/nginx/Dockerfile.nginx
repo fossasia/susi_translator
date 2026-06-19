@@ -1,0 +1,12 @@
+# Use the official lightweight Alpine-based Nginx image
+FROM nginx:alpine
+
+# Install openssl which is required for generating self-signed certificates
+RUN apk add --no-cache openssl
+
+# Copy the SSL generation script to the entrypoint directory.
+# Scripts in /docker-entrypoint.d/ are executed automatically by the Nginx image before starting the server.
+COPY generate_ssl.sh /docker-entrypoint.d/generate_ssl.sh
+
+# Ensure the script is executable
+RUN chmod +x /docker-entrypoint.d/generate_ssl.sh

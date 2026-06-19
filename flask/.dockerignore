@@ -1,0 +1,17 @@
+.git
+.venv
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+ENV/
+instance/
+.env
+.idea
+.vscode
+*.sqlite3
+node_modules/
+tests/
