@@ -1,7 +1,6 @@
 from __future__ import annotations
 import logging
 from flask import Blueprint, request, jsonify, render_template
-from flask_bcrypt import Bcrypt
 from flask_jwt_extended import (
     create_access_token,
     jwt_required,
@@ -12,12 +11,11 @@ from flask_jwt_extended import (
 )
 from sqlalchemy.exc import SQLAlchemyError
 from .models import db, Organizer
-from .extensions import limiter
+from .extensions import bcrypt, limiter
 
 logger = logging.getLogger(__name__)
 
 auth_bp = Blueprint("auth", __name__, url_prefix="/auth")
-bcrypt = Bcrypt()
 
 
 # Page routes

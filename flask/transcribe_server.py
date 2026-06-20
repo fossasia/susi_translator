@@ -2,7 +2,6 @@ from flask import Flask, request, jsonify, abort, Response, redirect, url_for, r
 from flask_restx import Api, Resource, fields
 from flask_cors import CORS
 from flask_jwt_extended import JWTManager, verify_jwt_in_request, get_jwt
-from flask_bcrypt import Bcrypt
 from flask_sock import Sock
 from flask_talisman import Talisman
 from werkzeug.exceptions import HTTPException
@@ -29,7 +28,8 @@ from datetime import timedelta
 from dotenv import load_dotenv
 
 
-from auth.routes import auth_bp, bcrypt
+from auth.routes import auth_bp
+from auth.extensions import bcrypt, limiter
 from auth.decorators import organizer_required
 from flask_admin import Admin
 from auth.admin_panel import SecureModelView, SecureAdminIndexView
@@ -162,8 +162,6 @@ def check_if_token_revoked(jwt_header, jwt_payload: dict) -> bool:
         token = db.session.query(TokenBlocklist.id).filter_by(jti=jti).scalar()
     return token is not None
 bcrypt.init_app(app)
-
-from auth.extensions import limiter
 limiter.init_app(app)
 
 # register auth
