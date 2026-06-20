@@ -107,7 +107,8 @@ CORS(app, resources={r"/*": {"origins": _cors_origins}}, supports_credentials=Tr
 logger.info(f"CORS allowed origins: {_cors_origins}")
 
 # Database, Auth, JWT 
-app.config["SQLALCHEMY_DATABASE_URI"] = os.getenv("DATABASE_URL", "sqlite:///susi.db")
+_db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "instance", "susi.db")
+app.config["SQLALCHEMY_DATABASE_URI"] = os.getenv("DATABASE_URL", f"sqlite:///{_db_path}")
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 app.config["JWT_SECRET_KEY"] = _require_secret_key("JWT_SECRET_KEY")
 app.config["JWT_TOKEN_LOCATION"] = ["cookies", "headers"]
