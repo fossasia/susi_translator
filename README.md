@@ -81,6 +81,16 @@ For a production deployment, ensure the following are configured in your environ
 
 ---
 
+## Database Migrations
+
+This project uses Flask-Migrate and Alembic to handle database schema upgrades. To ensure your database has the latest tables (such as `rooms`), run the following command:
+
+```bash
+uv run python -m flask --app flask/transcribe_server.py db upgrade
+```
+
+---
+
 ## Audio Grabber (Client-Side Ingestion)
 
 The grabber script (`flask/audio_grabber.py`) captures audio from one of five sources and streams it to the transcription server.

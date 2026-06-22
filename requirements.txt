@@ -12,6 +12,7 @@ djangorestframework
 drf-yasg
 flask
 flask-cors
+Flask-Migrate
 flask-restx
 mkdocs
 mkdocs-bootswatch
@@ -23,3 +24,4 @@ python-dotenv
 requests
 scipy
 torch
+pyOpenSSL

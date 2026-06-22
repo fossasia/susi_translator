@@ -33,14 +33,14 @@
             <label for="audio-upload">Upload File <span class="required">*</span></label>
             <div class="file-upload-wrapper">
                 <input type="file" id="audio-upload" accept=".mp3,.wav,.m4a,.ogg,.flac,.mp4,.aac" />
-                <div class="file-upload-help">Supported formats: .mp3, .wav, .m4a, .mp4, .ogg, .flac</div>
+                <div class="file-upload-help">Supported formats: .mp3, .wav, .m4a, .mp4, .ogg, .flac (Max size: 10MB)</div>
             </div>
         </div>
 
 
         <div class="form-group">
             <label for="source-lang">Source Language</label>
-            <select id="source-lang">
+            <select id="source-lang" required>
                 <option value="" disabled selected>e.g. English</option>
                 <option value="en">English</option>
                 <option value="de">German</option>
@@ -59,7 +59,7 @@
 
         <div class="form-group">
             <label for="transcription-model">Transcription Model</label>
-            <select id="transcription-model" onchange="onTranscriptionModelChange()">
+            <select id="transcription-model" onchange="onTranscriptionModelChange()" required>
                 <option value="" disabled selected>e.g. Whisper Local</option>
                 <option value="whisper_local">Whisper Local</option>
             </select>
@@ -88,7 +88,7 @@
 
             <div class="form-group">
                 <label for="translation-model">Translation Model</label>
-                <select id="translation-model" onchange="onTranslationModelChange()">
+                <select id="translation-model" onchange="onTranslationModelChange()" required>
                     <option value="" disabled selected>e.g. NLLB-200 Local</option>
                     <option value="nllb_local">NLLB-200 Local</option>
                 </select>

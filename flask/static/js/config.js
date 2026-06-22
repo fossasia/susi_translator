@@ -112,6 +112,7 @@ document.getElementById('config-form').addEventListener('submit', async (e) => {
             
             const uploadRes = await fetch('/api/v1/translate/upload_file', {
                 method: 'POST',
+                credentials: 'same-origin',
                 body: formData
             });
             const uploadData = await uploadRes.json();

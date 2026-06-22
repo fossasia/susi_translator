@@ -22,7 +22,7 @@ def _payload(stream_url=None, source_type=None, tenant_id="sec-test-tenant"):
     if stream_url is not None:
         body["stream_url"] = stream_url
     if source_type is not None:
-        body["source_type"] = source_type
+        body["stream_type"] = source_type
     return body
 
 

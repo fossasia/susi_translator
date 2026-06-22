@@ -117,7 +117,7 @@ app.config["JWT_TOKEN_LOCATION"] = ["cookies", "headers"]
 app.config["JWT_COOKIE_SECURE"] = _env_bool("JWT_COOKIE_SECURE", default=False)
 app.config["JWT_COOKIE_SAMESITE"] = os.getenv("JWT_COOKIE_SAMESITE", "Lax")
 
-# Default: match CSRF protection to whether HTTPS is enabled.
+#match CSRF protection to whether HTTPS is enabled
 # Operators can override explicitly via JWT_COOKIE_CSRF_PROTECT=true/false.
 _https_mode: bool = app.config["JWT_COOKIE_SECURE"]
 app.config["JWT_COOKIE_CSRF_PROTECT"] = _env_bool(
@@ -152,14 +152,10 @@ bcrypt.init_app(app)
 from auth.extensions import limiter
 limiter.init_app(app)
 
-# Register the auth blueprint (/auth/login, /auth/signup, /auth/api/*)
+# register auth
 app.register_blueprint(auth_bp)
 
-# Create DB tables if they don't exist yet (safe no-op if already created)
-with app.app_context():
-    db.create_all()
-
-# Initialize Flask-Admin
+# Flask-Admin
 from flask_admin.theme import Bootstrap4Theme
 admin = Admin(app, name='SUSI Admin', theme=Bootstrap4Theme(swatch='flatly'), url='/admin', index_view=SecureAdminIndexView())
 from auth.models import Organizer
@@ -795,17 +791,36 @@ def _transcripts_size_logic():
 UPLOAD_FOLDER = os.path.abspath(os.path.join('instance', 'uploads'))
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
+ALLOWED_EXTENSIONS ={'mp3', 'wav', 'm4a', 'ogg', 'flac', 'mp4', 'aac'}
+MAX_UPLOAD_SIZE = 10 * 1024 * 1024
+
+def allowed_file(filename):
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+
 @app.route('/api/v1/translate/upload_file', methods=['POST'])
 @organizer_required
 def upload_file():
+    #Check Content-Length for size limit
+    if request.content_length and request.content_length > MAX_UPLOAD_SIZE:
+        return jsonify({"status": "error", "message": "File exceeds the 10MB limit"}), 413
+
     if 'audio_file' not in request.files:
         return jsonify({"status": "error", "message": "No audio_file provided"}), 400
     
     file = request.files['audio_file']
     if file.filename == '':
         return jsonify({"status": "error", "message": "No selected file"}), 400
+
+    if not allowed_file(file.filename):
+        return jsonify({"status":"error", "message": "Invalid file type. Allowed: mp3, wav, m4a, ogg, flac, mp4, aac"}), 415
         
     if file:
+        #Extra safety check during read if Content-Length was missing/spoofed
+        file_data = file.read(MAX_UPLOAD_SIZE + 1)
+        if len(file_data) > MAX_UPLOAD_SIZE:
+            return jsonify({"status": "error", "message": "File exceeds the 10MB limit"}), 413
+        file.seek(0)
+        
         from werkzeug.utils import secure_filename
         import uuid
         filename = secure_filename(file.filename)
@@ -846,28 +861,10 @@ def configure_provider():
         if email:
             organizer = Organizer.query.filter_by(email=email).first()
 
-            room = db.session.get(Room, tenant_id)
-            if room:
-                room.configured = True
-                room.stream_type = data.get('stream_type')
-                room.stream_url = data.get('stream_url')
-                db.session.commit()
-
-        registry.configure(
-            tenant_id=tenant_id,
-            transcription=transcription,
-            translation=translation,
-            organizer_id=organizer.id if organizer else None,
-        )
-        configured = []
-        if transcription:
-            configured.append(f"transcription='{transcription.get('provider_name')}'")
-        if translation:
-            configured.append(f"translation='{translation.get('provider_name')}'")
-
         stream_url = data.get("stream_url")
         stream_type = data.get("stream_type", "youtube")
 
+        # Validation phase
         if stream_url:
             if stream_type == "youtube":
                 YouTubeSource._validate_url(stream_url)
@@ -889,12 +886,34 @@ def configure_provider():
                     ),
                 }), 400
 
+        # Database update (only after successful validation)
+        if email:
+            room = db.session.get(Room, tenant_id)
+            if room:
+                room.configured = True
+                room.stream_type = stream_type
+                room.stream_url = stream_url
+                db.session.commit()
+
         # Always kill any existing grabber for this tenant before applying new config.
         # This prevents a URL grabber from leaking if the user switches to Microphone.
         with grabber_lock:
             old_proc = grabber_processes.pop(tenant_id, None)
         if old_proc:
             _kill_grabber(old_proc, tenant_id)
+
+        # Model Configuration
+        registry.configure(
+            tenant_id=tenant_id,
+            transcription=transcription,
+            translation=translation,
+            organizer_id=organizer.id if organizer else None,
+        )
+        configured = []
+        if transcription:
+            configured.append(f"transcription='{transcription.get('provider_name')}'")
+        if translation:
+            configured.append(f"translation='{translation.get('provider_name')}'")
 
         if stream_url:
             from flask_jwt_extended import create_access_token

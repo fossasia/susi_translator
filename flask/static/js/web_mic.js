@@ -12,9 +12,9 @@ document.addEventListener('DOMContentLoaded', () => {
     let isRecording = false;
 
     const RATE = 16000;
-    const CHUNK_SIZE = RATE; // 1 second aggregator for VAD
-    const BUFFER_SIZE = 10 * RATE; // Max 10 seconds of audio per sentence
-    const SILENCE_THRESHOLD = 500 / 32768; // ~0.0152 (matches python backend)
+    const CHUNK_SIZE = RATE;
+    const BUFFER_SIZE = 10 * RATE;
+    const SILENCE_THRESHOLD = 500 / 32768; 
 
     const micWave1 = document.getElementById('mic-wave-1');
     const micWave2 = document.getElementById('mic-wave-2');
@@ -154,9 +154,10 @@ document.addEventListener('DOMContentLoaded', () => {
             const base64data = reader.result.split(',')[1];
             const data = { chunk_id: currentChunkId, audio_b64: base64data, tenant_id: TENANT_ID };
             
-            fetch('/transcribe', {
+            fetch('/transcripts', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
+                credentials: 'same-origin',
                 body: JSON.stringify(data)
             }).catch(error => console.error('Error sending audio chunk:', error));
         };
