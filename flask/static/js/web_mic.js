@@ -159,7 +159,14 @@ document.addEventListener('DOMContentLoaded', () => {
                 headers: { 'Content-Type': 'application/json' },
                 credentials: 'same-origin',
                 body: JSON.stringify(data)
-            }).catch(error => console.error('Error sending audio chunk:', error));
+            }).catch(error => {
+                console.error('Error sending audio chunk:', error);
+                const sysMsg = document.querySelector('.system-msg');
+                if (sysMsg) {
+                    sysMsg.innerText = 'Connection lost. Please stop and restart the microphone.';
+                    sysMsg.style.color = 'red';
+                }
+            });
         };
     }
 

@@ -110,6 +110,7 @@ logger.info(f"CORS allowed origins: {_cors_origins}")
 app.config["SQLALCHEMY_DATABASE_URI"] = os.getenv("DATABASE_URL", "sqlite:///susi.db")
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 app.config["JWT_SECRET_KEY"] = _require_secret_key("JWT_SECRET_KEY")
+app.secret_key = app.config["JWT_SECRET_KEY"]
 app.config["JWT_TOKEN_LOCATION"] = ["cookies", "headers"]
 
 
@@ -125,6 +126,7 @@ app.config["JWT_COOKIE_CSRF_PROTECT"] = _env_bool(
 )
 
 app.config["JWT_ACCESS_TOKEN_EXPIRES"] = timedelta(days=7)
+app.config["MAX_CONTENT_LENGTH"] = 10 * 1024 * 1024 # 10MB max upload size limit for OOM protection
 
 # Lifetime of the short-lived token issued to the audio_grabber subprocess.
 # The grabber refreshes it proactively at 80% of this window.
@@ -277,15 +279,11 @@ def _resolve_tenant(args, default='0000'):
 def _next_payload():
     """
     Pull the next audio payload from audio stack, dropping any superseded
-    duplicates so we only transcribe the latest version of each chunk.
-
-    IMPORTANT: If the current chunk is already large enough (~6s of audio),
-    process it now even if a newer version exists in the queue. This prevents
-    live streams (which never go silent) from spinning forever in this loop
-    because their chunk_id never rotates.
+    duplicates so we only transcribe the latest version of each chunk
     """
-    # 192_000 bytes = 96_000 int16 samples = 6 seconds at 16kHz
-    _MAX_SKIP_BYTES = 192_000
+    # 192_000 raw bytes = 96_000 int16 samples = 6 seconds at 16kHz
+    # Base64 inflates by 4/3, so we set the threshold to 256_000 encoded characters.
+    _MAX_SKIP_BYTES = 256_000
 
     tenant_id, chunk_id, audiob64 = audio_stack.get()
     while True:
@@ -829,6 +827,10 @@ def upload_file():
         file.save(filepath)
         return jsonify({"status": "success", "file_path": filepath}), 200
 
+
+
+
+
 #Provider configuration endpoint
 @app.route('/api/v1/translate/configure', methods=['POST'])
 @organizer_required
@@ -875,7 +877,10 @@ def configure_provider():
             elif stream_type == "file":
                 if not os.path.exists(stream_url):
                     return jsonify({"status": "error", "message": "File not found"}), 400
-                if not stream_url.startswith(UPLOAD_FOLDER):
+                
+                # Normalize the path to eliminate traversal payloads
+                absolute_stream_url = os.path.abspath(stream_url)
+                if os.path.commonpath([UPLOAD_FOLDER, absolute_stream_url]) != UPLOAD_FOLDER:
                     return jsonify({"status": "error", "message": "Invalid file path"}), 403
             else:
                 return jsonify({
@@ -886,7 +891,21 @@ def configure_provider():
                     ),
                 }), 400
 
-        # Database update (only after successful validation)
+        #Model Configuration first
+        registry.configure(
+            tenant_id=tenant_id,
+            transcription=transcription,
+            translation=translation,
+            organizer_id=organizer.id if organizer else None,
+        )
+
+        #Kill existing grabber ONLY after registry is successfully configured
+        with grabber_lock:
+            old_proc = grabber_processes.pop(tenant_id, None)
+        if old_proc:
+            _kill_grabber(old_proc, tenant_id)
+
+        #Database update ONLY after everything else succeeds
         if email:
             room = db.session.get(Room, tenant_id)
             if room:
@@ -895,20 +914,6 @@ def configure_provider():
                 room.stream_url = stream_url
                 db.session.commit()
 
-        # Always kill any existing grabber for this tenant before applying new config.
-        # This prevents a URL grabber from leaking if the user switches to Microphone.
-        with grabber_lock:
-            old_proc = grabber_processes.pop(tenant_id, None)
-        if old_proc:
-            _kill_grabber(old_proc, tenant_id)
-
-        # Model Configuration
-        registry.configure(
-            tenant_id=tenant_id,
-            transcription=transcription,
-            translation=translation,
-            organizer_id=organizer.id if organizer else None,
-        )
         configured = []
         if transcription:
             configured.append(f"transcription='{transcription.get('provider_name')}'")

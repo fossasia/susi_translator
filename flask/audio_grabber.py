@@ -51,6 +51,13 @@ VALID_SOURCES = ("mic", "file", "url", "stdin", "youtube")
 
 logger = logging.getLogger(__name__)
 
+if not VERIFY_SSL:
+    logger.warning(
+        "WARNING: FLASK_SSL_VERIFY is False. SSL certificate validation is "
+        "DISABLED for this grabber instance. Do NOT run this in production "
+        "without a secure network boundary."
+    )
+
 
 def _is_silent(pcm_bytes: bytes) -> bool: # Return True if the loudest sample in ``pcm_bytes`` is below ``SILENCE_THRESHOLD``.
     if not pcm_bytes:

@@ -33,7 +33,7 @@ dependencies = [
     "transformers",
     "yt-dlp",
     "cryptography>=49.0.0",
-    "pyOpenSSL>=24.0.0",
+    "pyopenssl>=24.0.0",
 ]
 
 [tool.uv]

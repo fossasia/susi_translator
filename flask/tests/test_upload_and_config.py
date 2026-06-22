@@ -15,10 +15,10 @@ def test_upload_file_invalid_extension(client):
     assert resp.status_code == 415
 
 def test_upload_file_too_large(client, ts):
-    """Ensure files exceeding MAX_UPLOAD_SIZE are rejected."""
-    # We set MAX_UPLOAD_SIZE dynamically for the test to avoid uploading 10MB
-    original_size = ts.MAX_UPLOAD_SIZE
-    ts.MAX_UPLOAD_SIZE = 10  # 10 bytes limit
+    """Ensure files exceeding MAX_CONTENT_LENGTH are rejected."""
+    # We set MAX_CONTENT_LENGTH dynamically for the test to avoid uploading 10MB
+    original_size = ts.app.config.get('MAX_CONTENT_LENGTH')
+    ts.app.config['MAX_CONTENT_LENGTH'] = 10  # 10 bytes limit
     
     data = {
         'audio_file': (BytesIO(b"this is more than 10 bytes"), 'test.mp3')
@@ -26,7 +26,7 @@ def test_upload_file_too_large(client, ts):
     resp = client.post('/api/v1/translate/upload_file', data=data, content_type='multipart/form-data')
     
     # Restore size
-    ts.MAX_UPLOAD_SIZE = original_size
+    ts.app.config['MAX_CONTENT_LENGTH'] = original_size
     
     assert resp.status_code == 413
 
