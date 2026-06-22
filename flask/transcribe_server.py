@@ -9,6 +9,8 @@ import threading
 import requests
 import logging
 import base64
+import soundfile as sf
+from supertonic import TTS
 import json
 import queue
 import signal
@@ -186,6 +188,69 @@ VALID_SOURCES = {"mic", "file", "url", "stdin", "youtube", "unspecified"}
 latest_session_by_source = {s: None for s in VALID_SOURCES}
 session_lock = threading.Lock()
 SESSION_TTL_SECONDS = int(os.getenv('SESSION_TTL_SECONDS', '7200'))
+
+#TTS 
+_supertonic_tts = None
+_tts_lock = threading.Lock()
+
+def get_tts_engine():
+    global _supertonic_tts
+    if _supertonic_tts is None:
+        with _tts_lock:
+            if _supertonic_tts is None:
+                _supertonic_tts = TTS(auto_download=True)
+    return _supertonic_tts
+
+SUPERTONIC_SUPPORTED_LANGS = {
+    "ar", "bg", "hr", "cs", "da", "nl", "en", "et", "fi", "fr", 
+    "de", "el", "hi", "hu", "id", "it", "ja", "ko", "lv", "lt", 
+    "pl", "pt", "ro", "ru", "sk", "sl", "es", "sv", "tr", "uk", "vi"
+}
+
+# Map specific languages to different Supertonic voice styles for variety
+TTS_VOICE_STYLES = {
+    "en": "M1",
+    "de": "M2",
+    "fr": "F1",
+    "es": "F2",
+    "hi": "M3",
+    "ar": "M4",
+    "pt": "F3",
+    "ru": "F4",
+    "ja": "F5",
+    "ko": "M5",
+    "it": "M1",
+}
+
+def generate_tts_sync(text, target_lang):
+    if not text.strip():
+        return None
+    try:
+        # Determine language (fallback to language-agnostic "na" if unsupported)
+        lang_tag = target_lang if target_lang in SUPERTONIC_SUPPORTED_LANGS else "na"
+        
+        tts_engine = get_tts_engine()
+        # Get voice style, fallback to F1 if not mapped
+        style_name = TTS_VOICE_STYLES.get(target_lang, "F1")
+        voice_style = tts_engine.get_voice_style(voice_name=style_name)
+        
+        wav, duration = tts_engine.synthesize(
+            text=text, 
+            lang=lang_tag, 
+            voice_style=voice_style,
+            total_steps=8,  # Default medium quality
+            speed=1.0
+        )
+        
+        # Supertonic outputs a numpy array. Convert to 16-bit PCM WAV.
+        buf = io.BytesIO()
+        sf.write(buf, wav.squeeze(), 44100, format='WAV', subtype='PCM_16')
+        audio_bytes = buf.getvalue()
+        
+        return base64.b64encode(audio_bytes).decode('utf-8')
+    except Exception as e:
+        logger.error(f"TTS Error: {e}")
+        return None
 
 
 # Small helper functions
@@ -1057,6 +1122,7 @@ def translate_stream():
     if not target_lang:
         target_lang = registry.get_language_config(tenant_id).get('target_lang')
     last_chunk_id = _parse_int_arg(request.args, 'last_chunk_id', default=0)
+    wants_audio = request.args.get('audio', 'false').lower() == 'true'
 
     def event_stream():
         sent_transcripts = {}
@@ -1107,11 +1173,20 @@ def translate_stream():
                             # Send an event if the transcription changed, or if we just
                             # successfully translated it to match the current transcription.
                             if needs_tx_update or (needs_tl_update and translated_transcripts.get(cid) == text):
-                                events_to_send.append({
+                                payload = {
                                     "chunk_id": cid,
                                     "transcript": text,
                                     "translation": translation,
-                                })
+                                }
+                                
+                                if wants_audio:
+                                    tts_text = translation if target_lang else text
+                                    lang_to_speak = target_lang if target_lang else registry.get_language_config(tenant_id).get('source_lang', 'en')
+                                    tts_b64 = generate_tts_sync(tts_text, lang_to_speak)
+                                    if tts_b64:
+                                        payload["audio_b64"] = tts_b64
+
+                                events_to_send.append(payload)
                                 sent_transcripts[cid] = text
 
                 for payload in events_to_send:

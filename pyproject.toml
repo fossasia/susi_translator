@@ -19,6 +19,7 @@ dependencies = [
     "redis>=5.0",
     "flask-restx",
     "flask-sqlalchemy>=3.1.1",
+    "huggingface-hub>=1.18.0",
     "mkdocs",
     "mkdocs-bootswatch",
     "numpy",
@@ -34,6 +35,8 @@ dependencies = [
     "yt-dlp",
     "cryptography>=49.0.0",
     "pyopenssl>=24.0.0",
+    "supertonic",
+    "soundfile",
 ]
 
 [tool.uv]
