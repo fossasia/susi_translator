@@ -136,10 +136,8 @@ _INTERNAL_TOKEN_EXPIRY: timedelta = timedelta(
 )
 
 from auth.models import db
-from flask_migrate import Migrate
 
 db.init_app(app)
-migrate = Migrate(app, db)
 jwt = JWTManager(app)
 
 @jwt.token_in_blocklist_loader
@@ -162,6 +160,11 @@ from flask_admin.theme import Bootstrap4Theme
 admin = Admin(app, name='SUSI Admin', theme=Bootstrap4Theme(swatch='flatly'), url='/admin', index_view=SecureAdminIndexView())
 from auth.models import Organizer
 admin.add_view(SecureModelView(Organizer, db, name="Users/Organizers"))
+
+
+#TODO: will be deleted after the merge of migrations PR
+with app.app_context():
+    db.create_all()
 
 
 # Shared in-memory state

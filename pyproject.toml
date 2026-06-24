@@ -14,7 +14,6 @@ dependencies = [
     "flask-bcrypt>=1.0.1",
     "flask-cors",
     "flask-jwt-extended>=4.7.4",
-    "Flask-Migrate>=4.0.0",
     "flask-limiter[redis]>=4.1.1",
     "flask-migrate",
     "redis>=5.0",
