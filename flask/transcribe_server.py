@@ -134,7 +134,10 @@ _INTERNAL_TOKEN_EXPIRY: timedelta = timedelta(
 )
 
 from auth.models import db
+from flask_migrate import Migrate
+
 db.init_app(app)
+migrate = Migrate(app, db)
 jwt = JWTManager(app)
 
 @jwt.token_in_blocklist_loader
