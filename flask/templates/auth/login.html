@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Login – SUSI Translator</title>
+  <meta name="description" content="Log in to SUSI Translator to manage your real-time transcription and translation sessions." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --blue:       #4f8ef7;
+      --blue-dark:  #3a74e0;
+      --blue-deep:  #2a5dc8;
+      --blue-light: #e8f0fe;
+      --blue-soft:  #f4f7ff;
+      --white:      #ffffff;
+      --text:       #1a2340;
+      --text-muted: #5a6a8a;
+      --border:     #d8e3f5;
+      --error:      #dc2626;
+      --success:    #16a34a;
+      --radius:     12px;
+    }
+
+    body {
+      font-family: 'Inter', sans-serif;
+      background: var(--blue-soft);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      align-items: stretch;
+    }
+
+    /* ---- Left panel (blue branding) ---- */
+    .auth-left {
+      display: none;
+      flex: 1;
+      background: linear-gradient(145deg, var(--blue) 0%, var(--blue-deep) 100%);
+      align-items: center;
+      justify-content: center;
+      flex-direction: column;
+      gap: 20px;
+      padding: 48px;
+      color: white;
+    }
+    @media (min-width: 900px) { .auth-left { display: flex; } }
+
+    .auth-left h2 { font-size: 2rem; font-weight: 800; letter-spacing: -0.5px; }
+    .auth-left p  { font-size: 1rem; opacity: 0.85; text-align: center; max-width: 300px; line-height: 1.6; }
+    .auth-left-features { list-style: none; margin-top: 12px; display: flex; flex-direction: column; gap: 10px; }
+    .auth-left-features li {
+      display: flex; align-items: center; gap: 10px;
+      font-size: 0.9rem; opacity: 0.9;
+    }
+    .auth-left-features li::before {
+      content: '✓';
+      width: 22px; height: 22px;
+      background: rgba(255,255,255,0.2);
+      border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 0.75rem; font-weight: 700; flex-shrink: 0;
+    }
+
+    /* ---- Right panel (white form) ---- */
+    .auth-right {
+      flex: 0 0 auto;
+      width: 100%;
+      max-width: 480px;
+      background: var(--white);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 48px 40px;
+    }
+    @media (max-width: 899px) { .auth-right { max-width: 100%; } }
+
+    .auth-form-wrap { width: 100%; max-width: 360px; }
+
+    /* ---- Logo ---- */
+    .auth-logo {
+      display: flex; align-items: center; gap: 10px;
+      margin-bottom: 36px;
+    }
+    .auth-logo-text { font-size: 1.1rem; font-weight: 700; color: var(--text); }
+    .auth-logo-text span { color: var(--blue); }
+
+    .auth-heading { font-size: 1.6rem; font-weight: 800; letter-spacing: -0.5px; margin-bottom: 6px; color: var(--text); }
+    .auth-subtext { font-size: 0.88rem; color: var(--text-muted); margin-bottom: 28px; }
+
+    /* ---- Form ---- */
+    .form-group { margin-bottom: 18px; }
+
+    label {
+      display: block;
+      font-size: 0.8rem;
+      font-weight: 600;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.6px;
+      margin-bottom: 7px;
+    }
+
+    input[type="email"],
+    input[type="password"] {
+      width: 100%;
+      padding: 11px 14px;
+      background: var(--blue-soft);
+      border: 1.5px solid var(--border);
+      border-radius: var(--radius);
+      color: var(--text);
+      font-size: 0.95rem;
+      font-family: 'Inter', sans-serif;
+      outline: none;
+      transition: border-color 0.15s, box-shadow 0.15s, background 0.15s;
+    }
+    input:focus {
+      border-color: var(--blue);
+      box-shadow: 0 0 0 3px rgba(79,142,247,0.15);
+      background: var(--white);
+    }
+    input::placeholder { color: #b0bbcc; }
+
+    /* ---- Submit button ---- */
+    .btn-primary {
+      width: 100%;
+      padding: 13px;
+      background: var(--blue);
+      color: white;
+      border: none;
+      border-radius: var(--radius);
+      font-size: 0.95rem;
+      font-weight: 700;
+      font-family: 'Inter', sans-serif;
+      cursor: pointer;
+      transition: background 0.15s, box-shadow 0.15s, transform 0.12s;
+      box-shadow: 0 4px 16px rgba(79,142,247,0.35);
+      margin-top: 6px;
+    }
+    .btn-primary:hover:not(:disabled) {
+      background: var(--blue-dark);
+      box-shadow: 0 6px 20px rgba(79,142,247,0.45);
+      transform: translateY(-1px);
+    }
+    .btn-primary:active:not(:disabled) { transform: translateY(0); }
+    .btn-primary:disabled { opacity: 0.55; cursor: not-allowed; box-shadow: none; }
+
+    /* ---- Status msg ---- */
+    .msg {
+      margin-top: 14px;
+      font-size: 0.875rem;
+      text-align: center;
+      min-height: 20px;
+      padding: 0 4px;
+    }
+    .msg.error   { color: var(--error); }
+    .msg.success { color: var(--success); }
+
+    /* ---- Divider ---- */
+    .divider { height: 1px; background: var(--border); margin: 24px 0; }
+
+    /* ---- Footer ---- */
+    .auth-footer { text-align: center; font-size: 0.875rem; color: var(--text-muted); }
+    .auth-footer a { color: var(--blue); text-decoration: none; font-weight: 600; }
+    .auth-footer a:hover { text-decoration: underline; }
+
+    /* ---- Spinner ---- */
+    .spinner {
+      display: inline-block;
+      width: 14px; height: 14px;
+      border: 2px solid rgba(255,255,255,0.4);
+      border-top-color: white;
+      border-radius: 50%;
+      animation: spin 0.6s linear infinite;
+      vertical-align: middle;
+      margin-right: 7px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ---- Fade in ---- */
+    .auth-form-wrap { animation: fadeIn 0.35s ease; }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
+  </style>
+</head>
+<body>
+
+<!-- Left branding panel -->
+<div class="auth-left">
+  <h2>SUSI Translator</h2>
+  <p>Real-time transcription and translation for your events and broadcasts.</p>
+  <ul class="auth-left-features">
+    <li>Live speech-to-text</li>
+    <li>Multi-language translation</li>
+    <li>YouTube & mic support</li>
+    <li>Instant session management</li>
+  </ul>
+</div>
+
+<!-- Right form panel -->
+<div class="auth-right">
+  <div class="auth-form-wrap">
+
+    <div class="auth-logo">
+      <div class="auth-logo-text">SUSI <span>Translator</span></div>
+    </div>
+
+    <h1 class="auth-heading">Welcome back</h1>
+    <p class="auth-subtext">Sign in to your organizer account.</p>
+
+    <div class="form-group">
+      <label for="email">Email address</label>
+      <input type="email" id="email" placeholder="you@example.com" autocomplete="email" />
+    </div>
+
+    <div class="form-group">
+      <label for="password">Password</label>
+      <input type="password" id="password" placeholder="••••••••" autocomplete="current-password" />
+    </div>
+
+    <button class="btn-primary" type="button" id="loginBtn" onclick="doLogin()">Sign In</button>
+
+    <p class="msg" id="msg" role="alert" aria-live="polite"></p>
+
+    <div class="divider"></div>
+    <div class="auth-footer">No account? <a href="/auth/signup">Create one free →</a></div>
+
+  </div>
+</div>
+
+<script>
+  document.addEventListener("keydown", function(e) {
+    if (e.key === "Enter") doLogin();
+  });
+
+  async function doLogin() {
+    const email    = document.getElementById("email").value.trim();
+    const password = document.getElementById("password").value;
+    const msgEl    = document.getElementById("msg");
+    const btn      = document.getElementById("loginBtn");
+
+    msgEl.textContent = "";
+    msgEl.className = "msg";
+
+    if (!email || !password) {
+      showMsg("Please enter your email and password.", "error"); return;
+    }
+
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span>Signing in…';
+
+    try {
+      const res  = await fetch("/auth/api/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, password }),
+        credentials: "same-origin",
+      });
+      const data = await res.json();
+
+      if (res.ok) {
+        showMsg("Success! Redirecting…", "success");
+        setTimeout(() => { window.location.href = "/home"; }, 400);
+      } else {
+        showMsg(data.message || "Login failed. Please try again.", "error");
+        resetBtn();
+      }
+    } catch (_) {
+      showMsg("Network error — please check your connection.", "error");
+      resetBtn();
+    }
+  }
+
+  function showMsg(text, type) {
+    const el = document.getElementById("msg");
+    el.textContent = text;
+    el.className = "msg" + (type ? " " + type : "");
+  }
+  function resetBtn() {
+    const btn = document.getElementById("loginBtn");
+    btn.disabled = false;
+    btn.textContent = "Sign In";
+  }
+</script>
+</body>
+</html>

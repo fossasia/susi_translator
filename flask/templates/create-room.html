@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+
+{% block title %}SUSI Translator – Rooms{% endblock %}
+
+{% block head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/create-room.css') }}" />
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>My Rooms</h1>
+    <button class="create-room-btn" id="createRoomBtn" onclick="createRoom()">
+        + Create Room
+    </button>
+</div>
+
+<div class="rooms-grid" id="rooms-grid"></div>
+
+<!-- Create Room Modal -->
+<div class="modal-overlay" id="createModal">
+    <div class="modal-card">
+        <div class="modal-header">
+            <h3>New Room</h3>
+            <button class="modal-close-btn" onclick="closeModal()" title="Close">✕</button>
+        </div>
+        <div class="form-group">
+            <label for="roomName">Room Name</label>
+            <input type="text" id="roomName" placeholder="e.g. Conference Room A" autocomplete="off" />
+        </div>
+        <div class="form-actions">
+            <button class="btn-cancel" onclick="closeModal()">Cancel</button>
+            <button class="btn-submit" id="submitRoomBtn" onclick="submitRoom()">Create</button>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/lobby.js') }}?v=2"></script>
+{% endblock %}

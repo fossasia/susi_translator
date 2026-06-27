@@ -1,0 +1,63 @@
+
+services:
+  web:
+    build:
+      context: ..
+      dockerfile: flask/Dockerfile
+    image: susi_flask_app
+    container_name: susi_web
+    restart: always
+    env_file:
+      - .env
+    volumes:
+      - ./instance:/app/instance
+      - model_cache:/root/.cache
+    expose:
+      - "5040"
+    networks:
+      - susi_net
+
+  nginx:
+    build:
+      context: ./deployment/nginx
+      dockerfile: Dockerfile.nginx
+    container_name: susi_nginx
+    restart: always
+    env_file:
+      - .env
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deployment/nginx/nginx.conf.template:/etc/nginx/nginx.conf.template:ro
+      - ./static:/app/static:ro
+      - certbot_certs:/etc/letsencrypt
+    depends_on:
+      - web
+    networks:
+      - susi_net
+
+  certbot:
+    image: certbot/certbot
+    container_name: susi_certbot
+    restart: always
+    env_file:
+      - .env
+    volumes:
+      - ./deployment/certbot:/opt/certbot-scripts
+      - certbot_certs:/etc/letsencrypt
+    entrypoint: ["/bin/sh", "/opt/certbot-scripts/entrypoint.sh"]
+    depends_on:
+      - nginx
+    networks:
+      - susi_net
+
+networks:
+  susi_net:
+    driver: bridge
+    driver_opts:
+      com.docker.network.driver.mtu: 1350
+
+volumes:
+  model_cache:
+  certbot_certs:

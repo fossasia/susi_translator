@@ -281,10 +281,23 @@ def _resolve_tenant(args, default='0000'):
 def _next_payload():
     """
     Pull the next audio payload from audio stack, dropping any superseded
-    duplicates so we only transcribe the latest version of each
+    duplicates so we only transcribe the latest version of each chunk.
+
+    IMPORTANT: If the current chunk is already large enough (~6s of audio),
+    process it now even if a newer version exists in the queue. This prevents
+    live streams (which never go silent) from spinning forever in this loop
+    because their chunk_id never rotates.
     """
+    # 192_000 bytes = 96_000 int16 samples = 6 seconds at 16kHz
+    _MAX_SKIP_BYTES = 192_000
+
     tenant_id, chunk_id, audiob64 = audio_stack.get()
     while True:
+        # If the current payload is already large, just process it now.
+        current_size = len(audiob64) if audiob64 else 0
+        if current_size >= _MAX_SKIP_BYTES:
+            return tenant_id, chunk_id, audiob64
+
         with audio_stack.mutex:
             has_newer = any(
                 t == tenant_id and c == chunk_id
@@ -295,6 +308,7 @@ def _next_payload():
 
         audio_stack.task_done()
         tenant_id, chunk_id, audiob64 = audio_stack.get()
+
 
 
 def process_audio():
@@ -552,13 +566,22 @@ def _session_logic(success_status: int = 200):
         from flask_jwt_extended import verify_jwt_in_request, get_jwt_identity
         from flask_jwt_extended.exceptions import JWTExtendedException
         from jwt.exceptions import PyJWTError
-        from auth.models import Organizer
+        from auth.models import Organizer, Room, db
         verify_jwt_in_request(optional=True)
         email = get_jwt_identity()
         if email:
             organizer = Organizer.query.filter_by(email=email).first()
             if organizer:
                 registry.claim(new_tenant_id, organizer.id)
+                room_name = data.get('name', 'Unnamed Room')
+                new_room = Room(
+                    tenant_id=new_tenant_id,
+                    name=room_name,
+                    organizer_id=organizer.id,
+                    source=source
+                )
+                db.session.add(new_room)
+                db.session.commit()
     except (JWTExtendedException, PyJWTError):
         pass  
 
@@ -582,14 +605,21 @@ def _transcribe_logic(success_status: int = 202):
     from flask_jwt_extended.exceptions import JWTExtendedException
     from jwt.exceptions import PyJWTError
     try:
-        verify_jwt_in_request(locations=["headers"])
+        verify_jwt_in_request(locations=["headers", "cookies"])
         claims = get_jwt()
     except (JWTExtendedException, PyJWTError) as exc:
         logger.warning(f"Auth failed for /transcripts: {exc.__class__.__name__}: {exc}")
+        logger.debug(f"Incoming header names: {list(request.headers.keys())}")
         return {"error": "Authentication required.", "status": "error"}, 401
 
-    if claims.get("role") != "internal" or claims.get("tenant_id") != tenant_id:
-        return {"error": "Forbidden or invalid tenant scope.", "status": "error"}, 403
+    if claims.get("role") == "internal":
+        if claims.get("tenant_id") != tenant_id:
+            return {"error": "Forbidden or invalid tenant scope.", "status": "error"}, 403
+    else:
+        try:
+            _assert_tenant_ownership(tenant_id)
+        except Exception:
+            return {"error": "Forbidden or invalid tenant scope.", "status": "error"}, 403
 
     # push to processing queue
     audio_stack.put((tenant_id, chunk_id, audio_b64))
@@ -762,6 +792,28 @@ def _transcripts_size_logic():
     t = {k: v for k, v in t.items() if _in_chunk_range(k, fromid, untilid)}
     return {'size': len(t)}
 
+UPLOAD_FOLDER = os.path.abspath(os.path.join('instance', 'uploads'))
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+
+@app.route('/api/v1/translate/upload_file', methods=['POST'])
+@organizer_required
+def upload_file():
+    if 'audio_file' not in request.files:
+        return jsonify({"status": "error", "message": "No audio_file provided"}), 400
+    
+    file = request.files['audio_file']
+    if file.filename == '':
+        return jsonify({"status": "error", "message": "No selected file"}), 400
+        
+    if file:
+        from werkzeug.utils import secure_filename
+        import uuid
+        filename = secure_filename(file.filename)
+        safe_name = f"{uuid.uuid4().hex}_{filename}"
+        filepath = os.path.join(UPLOAD_FOLDER, safe_name)
+        file.save(filepath)
+        return jsonify({"status": "success", "file_path": filepath}), 200
+
 #Provider configuration endpoint
 @app.route('/api/v1/translate/configure', methods=['POST'])
 @organizer_required
@@ -788,11 +840,18 @@ def configure_provider():
 
     try:
         from flask_jwt_extended import get_jwt_identity
-        from auth.models import Organizer
+        from auth.models import Organizer, Room, db
         email = get_jwt_identity()
         organizer = None
         if email:
             organizer = Organizer.query.filter_by(email=email).first()
+
+            room = db.session.get(Room, tenant_id)
+            if room:
+                room.configured = True
+                room.stream_type = data.get('stream_type')
+                room.stream_url = data.get('stream_url')
+                db.session.commit()
 
         registry.configure(
             tenant_id=tenant_id,
@@ -807,8 +866,37 @@ def configure_provider():
             configured.append(f"translation='{translation.get('provider_name')}'")
 
         stream_url = data.get("stream_url")
+        source_type = data.get("source_type", "youtube")
+
         if stream_url:
-            logger.info(f"Spawning audio_grabber for tenant {tenant_id} on url {stream_url}")
+            if source_type == "youtube":
+                YouTubeSource._validate_url(stream_url)
+            elif source_type == "url":
+                if not organizer or not organizer.is_admin:
+                    return jsonify({"status": "error", "message": "Only admins can provide direct stream URLs."}), 403
+                URLSource._validate_url(stream_url)
+            elif source_type == "file":
+                if not os.path.exists(stream_url):
+                    return jsonify({"status": "error", "message": "File not found"}), 400
+                if not stream_url.startswith(UPLOAD_FOLDER):
+                    return jsonify({"status": "error", "message": "Invalid file path"}), 403
+            else:
+                return jsonify({
+                    "status": "error",
+                    "message": (
+                        f"Unknown source_type {source_type!r}. "
+                        "Must be 'youtube', 'url', or 'file'."
+                    ),
+                }), 400
+
+        # Always kill any existing grabber for this tenant before applying new config.
+        # This prevents a URL grabber from leaking if the user switches to Microphone.
+        with grabber_lock:
+            old_proc = grabber_processes.pop(tenant_id, None)
+        if old_proc:
+            _kill_grabber(old_proc, tenant_id)
+
+        if stream_url:
             from flask_jwt_extended import create_access_token
 
             internal_token = create_access_token(
@@ -816,32 +904,20 @@ def configure_provider():
                 expires_delta=_INTERNAL_TOKEN_EXPIRY,
                 additional_claims={"role": "internal", "tenant_id": tenant_id},
             )
-        
-            source_type = data.get("source_type", "youtube")
-
-            if source_type == "youtube":
-                YouTubeSource._validate_url(stream_url)
-            elif source_type == "url":
-                if not organizer or not organizer.is_admin:
-                    return jsonify({"status": "error", "message": "Only admins can provide direct stream URLs."}), 403
-                URLSource._validate_url(stream_url)
-            else:
-                return jsonify({
-                    "status": "error",
-                    "message": (
-                        f"Unknown source_type {source_type!r}. "
-                        "Must be 'youtube' or 'url'."
-                    ),
-                }), 400
 
             logger.info(
                 f"Spawning audio_grabber for tenant {tenant_id} "
                 f"on {source_type} url {stream_url}"
             )
+            scheme = "https" if os.getenv("FLASK_SSL_CONTEXT") else "http"
+            port = os.getenv('FLASK_PORT', '5040')
+            server_url = f"{scheme}://localhost:{port}"
+
             cmd = [
                 sys.executable,
                 "audio_grabber.py",
                 "--tenant", tenant_id,
+                "--server", server_url,
                 source_type,
                 "--url", stream_url,
             ]
@@ -861,26 +937,24 @@ def configure_provider():
                     logger.info(f"Using YouTube cookies file at {cookies_path}")
                     cmd.extend(["--cookies", cookies_path])
 
-            # Kill any existing grabber for this tenant before replacing it.
-            # Without this, the old yt-dlp/ffmpeg process group is leaked.
-            with grabber_lock:
-                old_proc = grabber_processes.pop(tenant_id, None)
-            if old_proc:
-                _kill_grabber(old_proc, tenant_id)
+
 
             proc = subprocess.Popen(
                 cmd,
                 cwd=os.path.dirname(os.path.abspath(__file__)),
-                preexec_fn=os.setsid,
+                start_new_session=True,
                 env=grabber_env,
             )
             with grabber_lock:
                 grabber_processes[tenant_id] = proc
 
-
+        # Check if pipeline is already ready (models pre-loaded in memory).
+        # If so, include it in the response so the frontend can skip polling entirely.
+        pipeline_ready = registry.is_pipeline_ready(tenant_id)
         return jsonify({
             "status": "success",
             "message": f"Configured {', '.join(configured)} for tenant '{tenant_id}'.",
+            "pipeline_ready": pipeline_ready,
         }), 200
     except ValueError as e:
         return jsonify({"status": "error", "message": str(e)}), 400
@@ -975,6 +1049,30 @@ def translate_stream():
 
 # Tenant lifecycle endpoints
 
+@app.route('/api/v1/translate/rooms', methods=['GET'])
+@organizer_required
+def get_rooms():
+    from flask_jwt_extended import get_jwt_identity
+    from auth.models import Organizer, Room
+    email = get_jwt_identity()
+    if not email:
+        return jsonify([]), 200
+    organizer = Organizer.query.filter_by(email=email).first()
+    if not organizer:
+        return jsonify([]), 200
+    
+    rooms = Room.query.filter_by(organizer_id=organizer.id).all()
+    room_data = []
+    for r in rooms:
+        room_data.append({
+            "tenant_id": r.tenant_id,
+            "name": r.name,
+            "configured": r.configured,
+            "streamType": r.stream_type,
+            "videoUrl": r.stream_url
+        })
+    return jsonify(room_data), 200
+
 @app.route('/stop_event/<tenant_id>', methods=['POST'])
 @organizer_required
 def stop_event(tenant_id):
@@ -993,6 +1091,15 @@ def stop_event(tenant_id):
 
     with transcripts_lock:
         transcriptd.pop(tenant_id, None)
+
+    try:
+        from auth.models import Room, db
+        room = db.session.get(Room, tenant_id)
+        if room:
+            db.session.delete(room)
+            db.session.commit()
+    except Exception as e:
+        logger.error(f"Error deleting room {tenant_id} from DB: {e}")
 
     return jsonify({"status": "success", "message": f"Event {tenant_id} stopped"}), 200
 
@@ -1361,7 +1468,8 @@ def stream_page(tenant_id: str):
         return redir
     _assert_tenant_ownership(tenant_id)
     video_url = request.args.get("url", "")
-    return render_template("stream.html", tenant_id=tenant_id, video_url=video_url)
+    stream_type = request.args.get("type", "")
+    return render_template("stream.html", tenant_id=tenant_id, video_url=video_url, stream_type=stream_type)
 
 
 if __name__ == '__main__':
@@ -1379,4 +1487,11 @@ if __name__ == '__main__':
         )
 
     # use_reloader=False because the audio-worker thread above must not be spawned twice
-    app.run(host=host, port=port, debug=debug, use_reloader=False)
+    # NOTE: Do NOT use ssl_context='adhoc' in production.
+    # In production, run Flask behind a reverse proxy (Nginx or Caddy) that handles
+    # HTTPS with a real certificate (e.g. Let's Encrypt). Flask serves plain HTTP
+    # on localhost, and the proxy terminates TLS externally.
+    # For local development with mic access (requires HTTPS), you can temporarily
+    # set ssl_context='adhoc' after installing pyopenssl, but never commit that to prod.
+    ssl_ctx = os.getenv('FLASK_SSL_CONTEXT', None)  # set to 'adhoc' only for local dev
+    app.run(host=host, port=port, debug=debug, use_reloader=False, ssl_context=ssl_ctx or None)

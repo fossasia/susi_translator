@@ -1,0 +1,117 @@
+*, *::before, *::after { box-sizing: border-box; }
+
+:root {
+  --blue:        #4f8ef7;
+  --blue-dark:   #3a74e0;
+  --blue-deeper: #2a5dc8;
+  --blue-light:  #e8f0fe;
+  --blue-soft:   #f0f5ff;
+  --white:       #ffffff;
+  --text:        #1a2340;
+  --text-muted:  #5a6a8a;
+  --border:      #d8e3f5;
+  --shadow:      rgba(79, 142, 247, 0.12);
+  --radius:      10px;
+}
+
+body {
+  margin: 0;
+  font-family: 'Inter', Arial, sans-serif;
+  background-color: var(--white);
+  color: var(--text);
+}
+
+/* ---- Navbar ---- */
+.navbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0 28px;
+  height: 60px;
+  background: var(--blue);
+  box-shadow: 0 2px 12px rgba(79, 142, 247, 0.25);
+  position: sticky;
+  top: 0;
+  z-index: 100;
+}
+
+.nav-brand-group {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.brand {
+  color: var(--white);
+  text-decoration: none;
+  font-size: 1.15rem;
+  font-weight: 700;
+  letter-spacing: -0.3px;
+  transition: opacity 0.15s;
+}
+.brand:hover { opacity: 0.85; }
+
+.brand-tag {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--blue);
+  background: var(--white);
+  border-radius: 6px;
+  padding: 2px 9px;
+  letter-spacing: 0.4px;
+}
+
+/* ---- Logout button ---- */
+.logout-btn {
+  background: rgba(255,255,255,0.15);
+  color: var(--white);
+  border: 1.5px solid rgba(255,255,255,0.5);
+  padding: 6px 18px;
+  border-radius: 8px;
+  font-size: 0.875rem;
+  font-weight: 600;
+  font-family: 'Inter', Arial, sans-serif;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+.logout-btn:hover:not(:disabled) {
+  background: rgba(255,255,255,0.28);
+  border-color: white;
+}
+.logout-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Main content area */ 
+main {
+  min-height: calc(100vh - 60px);
+  padding: 32px 28px;
+  background-color: var(--white);
+}
+
+/* Flash messages */
+#flash-container {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  z-index: 9999;
+}
+.flash {
+  padding: 12px 20px;
+  border-radius: 10px;
+  font-size: 0.9rem;
+  font-weight: 500;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.1);
+  animation: slideIn 0.3s ease;
+}
+@keyframes slideIn {
+  from { opacity: 0; transform: translateX(20px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+.flash-success { background: #edfbf5; border: 1px solid #6ee7b7; color: #065f46; }
+.flash-error   { background: #fef2f2; border: 1px solid #fca5a5; color: #991b1b; }
+.flash-info    { background: var(--blue-light); border: 1px solid #93c5fd; color: #1e40af; }

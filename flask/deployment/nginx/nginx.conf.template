@@ -1,0 +1,78 @@
+# Configure the maximum number of connections per worker
+events {
+    worker_connections 1024;
+}
+
+http {
+    # Include standard MIME types mapping
+    include       mime.types;
+    default_type  application/octet-stream;
+    
+    sendfile        on;
+    keepalive_timeout  65;
+
+    # Upstream pointing to the docker-compose 'web' service
+    upstream flask_app {
+        server web:5040;
+    }
+
+    # Redirect all HTTP traffic to HTTPS
+    server {
+        listen 80;
+        server_name _;
+        return 301 https://$host$request_uri;
+    }
+
+    server {
+        listen 443 ssl;
+        server_name _;
+
+        # SSL certificates managed by Certbot (cert-name = DOMAIN_NAME)
+        # The ${DOMAIN_NAME} placeholder is substituted at container startup
+        # by bootstrap_ssl.sh using envsubst.
+        ssl_certificate /etc/letsencrypt/live/${DOMAIN_NAME}/fullchain.pem;
+        ssl_certificate_key /etc/letsencrypt/live/${DOMAIN_NAME}/privkey.pem;
+        ssl_protocols TLSv1.2 TLSv1.3;
+        ssl_ciphers HIGH:!aNULL:!MD5;
+
+        # Serve static files directly
+        location /static/ {
+            alias /app/static/;
+            expires 30d;
+        }
+
+        # Handle SSE streams without buffering.
+        # proxy_buffering off is what disables Nginx buffering for SSE;
+        # chunked_transfer_encoding is not needed here.
+        location /api/v1/translate/stream {
+            proxy_pass http://flask_app;
+            proxy_http_version 1.1;
+            proxy_set_header Connection '';
+            proxy_buffering off;
+            proxy_cache off;
+            proxy_read_timeout 86400s;
+            proxy_send_timeout 86400s;
+        }
+
+        # Configure endpoint: model warmup can take a while
+        # Give it a 5-minute window before nginx decides to time out.
+        location /api/v1/translate/configure {
+            proxy_pass http://flask_app;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+            proxy_read_timeout 300s;
+            proxy_send_timeout 300s;
+        }
+
+        # Proxy all other requests to Flask
+        location / {
+            proxy_pass http://flask_app;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+        }
+    }
+}

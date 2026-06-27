@@ -31,6 +31,9 @@ dependencies = [
     "torch",
     "transformers",
     "yt-dlp",
+    "cryptography>=49.0.0",
+    "gunicorn>=23.0.0",
+    "gevent>=24.0.0",
 ]
 
 [tool.uv]

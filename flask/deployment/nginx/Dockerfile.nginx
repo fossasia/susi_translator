@@ -1,0 +1,10 @@
+
+# Use a lightweight Alpine-based Nginx image
+FROM nginx:alpine
+
+# Install openssl for generating self-signed certificates
+RUN apk add --no-cache openssl
+
+# Copy and enable the SSL bootstrap script to run before Nginx starts
+COPY bootstrap_ssl.sh /docker-entrypoint.d/bootstrap_ssl.sh
+RUN chmod +x /docker-entrypoint.d/bootstrap_ssl.sh

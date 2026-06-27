@@ -1,0 +1,127 @@
+{% extends "base.html" %}
+
+{% block title %}SUSI Translator - Configure Room{% endblock %}
+
+{% block head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/config.css') }}?v=2" />
+{% endblock %}
+
+{% block content %}
+<div class="config-container">
+    <div class="config-header">
+        <h2>Configure Room</h2>
+        <p class="room-id">Room ID: {{ tenant_id }}</p>
+    </div>
+
+    <form id="config-form">
+
+        <div class="form-group">
+            <label for="stream-type">Stream Type <span class="required">*</span></label>
+            <select id="stream-type" onchange="onStreamTypeChange()">
+                <option value="youtube" selected>Stream Link</option>
+                <option value="mic">Microphone</option>
+                <option value="file">Audio File</option>
+            </select>
+        </div>
+
+        <div class="form-group" id="stream-input-group">
+            <label for="stream-url" id="stream-input-label">Stream URL <span class="required" id="stream-input-required">*</span></label>
+            <input type="text" id="stream-url" placeholder="https://www.youtube.com/watch?v=..." required />
+        </div>
+
+        <div class="form-group" id="file-upload-group" style="display: none;">
+            <label for="audio-upload">Upload File <span class="required">*</span></label>
+            <div class="file-upload-wrapper">
+                <input type="file" id="audio-upload" accept=".mp3,.wav,.m4a,.ogg,.flac,.mp4,.aac" />
+                <div class="file-upload-help">Supported formats: .mp3, .wav, .m4a, .mp4, .ogg, .flac</div>
+            </div>
+        </div>
+
+
+        <div class="form-group">
+            <label for="source-lang">Source Language</label>
+            <select id="source-lang">
+                <option value="" disabled selected>e.g. English</option>
+                <option value="en">English</option>
+                <option value="de">German</option>
+                <option value="fr">French</option>
+                <option value="es">Spanish</option>
+                <option value="hi">Hindi</option>
+                <option value="zh">Chinese</option>
+                <option value="ar">Arabic</option>
+                <option value="pt">Portuguese</option>
+                <option value="ru">Russian</option>
+                <option value="ja">Japanese</option>
+                <option value="ko">Korean</option>
+                <option value="it">Italian</option>
+            </select>
+        </div>
+
+        <div class="form-group">
+            <label for="transcription-model">Transcription Model</label>
+            <select id="transcription-model" onchange="onTranscriptionModelChange()">
+                <option value="" disabled selected>e.g. Whisper Local</option>
+                <option value="whisper_local">Whisper Local</option>
+            </select>
+        </div>
+
+        <div class="form-group" id="whisper-size-group">
+            <label for="model-size">Model Size</label>
+            <select id="model-size">
+                <option value="tiny" selected>Tiny</option>
+            </select>
+        </div>
+
+        <div class="form-group hidden" id="transcription-apikey-group">
+            <label for="transcription-apikey">API Key / HF Token</label>
+            <input type="password" id="transcription-apikey" placeholder="Enter API key..." />
+        </div>
+
+
+        <div class="form-group toggle-group">
+            <label class="toggle-label">
+                <input type="checkbox" id="translation-toggle" onchange="toggleTranslation()" />
+                Enable Translation
+            </label>
+            <p class="hint">Translate transcriptions in real-time to another language</p>
+        </div>
+
+        <div id="translation-section" class="hidden translation-section">
+
+            <div class="section-divider">Translation Settings</div>
+
+            <div class="form-group">
+                <label for="translation-model">Translation Model</label>
+                <select id="translation-model" onchange="onTranslationModelChange()">
+                    <option value="" disabled selected>e.g. NLLB-200 Local</option>
+                    <option value="nllb_local">NLLB-200 Local</option>
+                </select>
+            </div>
+
+            <div class="form-group hidden" id="translation-apikey-group">
+                <label for="translation-apikey">API Key</label>
+                <input type="password" id="translation-apikey" placeholder="Enter API key..." />
+            </div>
+
+        </div>
+
+   
+        <div class="form-actions">
+            <button type="submit" class="start-btn">Start Session</button>
+        </div>
+
+    </form>
+</div>
+<div id="loading-overlay" class="hidden">
+    <div class="spinner"></div>
+    <h3 id="loading-title">Warming up AI Models...</h3>
+    <p id="loading-subtitle">Allocating memory and preparing pipelines. This takes a few seconds.</p>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    const TENANT_ID = "{{ tenant_id }}";
+</script>
+<script src="{{ url_for('static', filename='js/config.js') }}?v=5"></script>
+{% endblock %}

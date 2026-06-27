@@ -1,0 +1,293 @@
+/* Rooms page */
+
+/* Page header */
+.page-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 28px;
+    padding-bottom: 20px;
+    border-bottom: 2px solid #e8f0fe;
+}
+
+.page-header h2 {
+    margin: 0;
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: #1a2340;
+    letter-spacing: -0.3px;
+}
+
+/* Create Room button */
+.create-room-btn {
+    background-color: #4f8ef7;
+    color: white;
+    border: none;
+    padding: 10px 22px;
+    border-radius: 8px;
+    font-size: 0.95rem;
+    font-weight: 600;
+    font-family: 'Inter', Arial, sans-serif;
+    cursor: pointer;
+    transition: background 0.18s, box-shadow 0.18s, transform 0.15s;
+    box-shadow: 0 4px 12px rgba(79,142,247,0.3);
+}
+.create-room-btn:hover {
+    background-color: #3a74e0;
+    box-shadow: 0 6px 18px rgba(79,142,247,0.4);
+    transform: translateY(-1px);
+}
+.create-room-btn:active { transform: translateY(0); }
+
+/* Rooms grid */
+.rooms-grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 20px;
+}
+
+/* Room card */
+.room-card {
+    background-color: #ffffff;
+    border: 1.5px solid #d8e3f5;
+    border-radius: 12px;
+    width: 270px;
+    cursor: pointer;
+    transition: box-shadow 0.2s, border-color 0.2s, transform 0.15s;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+.room-card:hover {
+    box-shadow: 0 8px 28px rgba(79,142,247,0.18);
+    border-color: #4f8ef7;
+    transform: translateY(-2px);
+}
+
+/* Card banner */
+.room-card-banner {
+    background: linear-gradient(135deg, #4f8ef7 0%, #3a74e0 100%);
+    height: 110px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: white;
+    font-size: 2.2rem;
+}
+
+/* Card body */
+.room-card-body {
+    padding: 16px;
+    flex: 1;
+}
+.room-card-body h3 {
+    margin: 0 0 6px 0;
+    font-size: 1rem;
+    font-weight: 600;
+    color: #1a2340;
+}
+.room-card-body p {
+    margin: 0;
+    font-size: 0.8rem;
+    color: #5a6a8a;
+    font-family: monospace;
+}
+
+/* Card footer */
+.room-card-footer {
+    padding: 12px 16px;
+    border-top: 1px solid #e8f0fe;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    background: #f8faff;
+}
+
+.footer-actions {
+    display: flex;
+    gap: 8px;
+}
+
+/* View button */
+.view-btn {
+    background-color: #4f8ef7;
+    color: white;
+    border: none;
+    padding: 7px 12px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 0.85rem;
+    font-weight: 600;
+    font-family: 'Inter', Arial, sans-serif;
+    transition: background 0.15s;
+}
+.view-btn:hover { background-color: #3a74e0; }
+
+/* Edit button */
+.edit-btn {
+    background-color: transparent;
+    color: #4f8ef7;
+    border: 1.5px solid #4f8ef7;
+    padding: 6px 10px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 0.8rem;
+    font-weight: 500;
+    font-family: 'Inter', Arial, sans-serif;
+    transition: background 0.15s, color 0.15s;
+}
+.edit-btn:hover {
+    background-color: #4f8ef7;
+    color: white;
+}
+
+/* Delete button */
+.delete-btn {
+    background-color: transparent;
+    color: #e53e3e;
+    border: 1.5px solid #e53e3e;
+    padding: 6px 10px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 0.8rem;
+    font-weight: 500;
+    font-family: 'Inter', Arial, sans-serif;
+    transition: background 0.15s, color 0.15s;
+}
+.delete-btn:hover {
+    background-color: #e53e3e;
+    color: white;
+}
+
+/* Empty state */
+.empty-state {
+    text-align: center;
+    padding: 60px 24px;
+    color: #5a6a8a;
+    width: 100%;
+}
+.empty-state p {
+    font-size: 1rem;
+    margin: 0;
+}
+
+/* Modal overlay */
+.modal-overlay {
+    position: fixed;
+    top: 0; left: 0;
+    width: 100%; height: 100%;
+    background: rgba(26, 35, 64, 0.45);
+    display: none;
+    justify-content: center;
+    align-items: center;
+    z-index: 1000;
+    backdrop-filter: blur(2px);
+}
+
+/* Modal card */
+.modal-card {
+    background-color: #ffffff;
+    padding: 32px 28px;
+    border-radius: 16px;
+    width: 420px;
+    box-shadow: 0 24px 48px rgba(79,142,247,0.18), 0 4px 12px rgba(0,0,0,0.08);
+    border: 1.5px solid #d8e3f5;
+    animation: modalIn 0.25s ease;
+}
+@keyframes modalIn {
+    from { opacity: 0; transform: scale(0.96) translateY(10px); }
+    to   { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+.modal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 24px;
+}
+.modal-header h3 {
+    margin: 0;
+    font-size: 1.15rem;
+    font-weight: 700;
+    color: #1a2340;
+}
+.modal-close-btn {
+    background: none;
+    border: none;
+    font-size: 1.3rem;
+    color: #5a6a8a;
+    cursor: pointer;
+    padding: 4px 8px;
+    border-radius: 6px;
+    transition: background 0.15s;
+}
+.modal-close-btn:hover { background: #e8f0fe; color: #1a2340; }
+
+/* Form group inside modal */
+.form-group {
+    margin-bottom: 16px;
+}
+.form-group label {
+    display: block;
+    margin-bottom: 6px;
+    font-size: 0.82rem;
+    font-weight: 600;
+    color: #5a6a8a;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+.form-group input,
+.form-group select {
+    width: 100%;
+    padding: 10px 12px;
+    background: #f8faff;
+    border: 1.5px solid #d8e3f5;
+    color: #1a2340;
+    border-radius: 8px;
+    font-size: 0.95rem;
+    font-family: 'Inter', Arial, sans-serif;
+    outline: none;
+    transition: border-color 0.15s, box-shadow 0.15s;
+    box-sizing: border-box;
+}
+.form-group input:focus,
+.form-group select:focus {
+    border-color: #4f8ef7;
+    box-shadow: 0 0 0 3px rgba(79,142,247,0.15);
+    background: #ffffff;
+}
+
+/* Form actions */
+.form-actions {
+    margin-top: 24px;
+    display: flex;
+    gap: 10px;
+    justify-content: flex-end;
+}
+.btn-cancel {
+    background: transparent;
+    color: #5a6a8a;
+    border: 1.5px solid #d8e3f5;
+    padding: 9px 20px;
+    border-radius: 8px;
+    font-size: 0.9rem;
+    font-weight: 600;
+    font-family: 'Inter', Arial, sans-serif;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
+}
+.btn-cancel:hover { background: #f0f5ff; border-color: #b8ccf0; }
+.btn-submit {
+    background: #4f8ef7;
+    color: white;
+    border: none;
+    padding: 9px 24px;
+    border-radius: 8px;
+    font-size: 0.9rem;
+    font-weight: 600;
+    font-family: 'Inter', Arial, sans-serif;
+    cursor: pointer;
+    transition: background 0.15s, box-shadow 0.15s;
+    box-shadow: 0 3px 10px rgba(79,142,247,0.3);
+}
+.btn-submit:hover { background: #3a74e0; box-shadow: 0 5px 15px rgba(79,142,247,0.4); }
