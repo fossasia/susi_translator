@@ -97,7 +97,10 @@ async function submitRoom() {
     try {
         const response = await fetch('/session', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRF-TOKEN': getCsrfToken(),
+            },
             body: JSON.stringify({ source: 'unspecified', name: name }),
             credentials: 'same-origin',
         });
@@ -125,6 +128,7 @@ async function deleteRoom(event, tenant_id) {
     try {
         await fetch(`/stop_event/${tenant_id}`, {
             method: 'POST',
+            headers: { 'X-CSRF-TOKEN': getCsrfToken() },
             credentials: 'same-origin',
         });
     } catch (e) {

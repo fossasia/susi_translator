@@ -83,19 +83,23 @@ For a production deployment, ensure the following are configured in your environ
 
 ## Database Migrations
 
-This project uses Flask-Migrate and Alembic to handle database schema upgrades. To ensure your database has the latest tables (such as `rooms`), run the following command:
+This project uses Flask-Migrate and Alembic to handle database schema upgrades. To ensure your database has the latest tables (such as `rooms`), run the following commands **from the `flask/` directory**:
 
 ```bash
-uv run python -m flask --app flask/transcribe_server.py db upgrade
+cd flask
+uv run python -m flask --app transcribe_server.py db upgrade
 ```
 
----
+**Existing deployments:** If you have an existing `susi.db` that was created before migrations were added, the `rooms` table may be missing. Running `db upgrade` will add it without affecting your existing `organizers` or `token_blocklist` data.
+
+**Fresh installs:** `db upgrade` must be run **before** starting the server for the first time, or the server will fail when attempting to write room records to the database.
 
 ## Audio Grabber (Client-Side Ingestion)
 
 The grabber script (`flask/audio_grabber.py`) captures audio from one of five sources and streams it to the transcription server.
 
 | Source    | Backend                 | Extra Requirements                    |
+
 | --------- | ----------------------- | ------------------------------------- |
 | `mic`     | PyAudio                 | a working input device                |
 | `file`    | pydub + ffmpeg          | ffmpeg on PATH                        |

@@ -230,6 +230,14 @@
 </div>
 
 <script>
+  /** Read the Flask-JWT-Extended CSRF cookie for use in mutating requests. */
+  function getCsrfToken() {
+    const match = document.cookie
+      .split('; ')
+      .find(row => row.startsWith('csrf_access_token='));
+    return match ? match.split('=')[1] : '';
+  }
+
   function updateStrength(pw) {
     const bar   = document.getElementById("strengthBar");
     const label = document.getElementById("strengthLabel");
@@ -274,7 +282,10 @@
     try {
       const res  = await fetch("/auth/api/signup", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          "X-CSRF-TOKEN": getCsrfToken(),
+        },
         body: JSON.stringify({ name, email, password }),
         credentials: "same-origin",
       });

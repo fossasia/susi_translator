@@ -156,7 +156,10 @@ document.addEventListener('DOMContentLoaded', () => {
             
             fetch('/transcripts', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRF-TOKEN': getCsrfToken(),
+                },
                 credentials: 'same-origin',
                 body: JSON.stringify(data)
             }).catch(error => {

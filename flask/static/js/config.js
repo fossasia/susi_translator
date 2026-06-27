@@ -112,6 +112,7 @@ document.getElementById('config-form').addEventListener('submit', async (e) => {
             
             const uploadRes = await fetch('/api/v1/translate/upload_file', {
                 method: 'POST',
+                headers: { 'X-CSRF-TOKEN': getCsrfToken() },
                 credentials: 'same-origin',
                 body: formData
             });
@@ -168,7 +169,10 @@ document.getElementById('config-form').addEventListener('submit', async (e) => {
         // Send the configuration to the server
         const response = await fetch('/api/v1/translate/configure', {
             method: 'POST',
-            headers: {'Content-Type': 'application/json'},
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRF-TOKEN': getCsrfToken(),
+            },
             credentials: 'same-origin',
             body: JSON.stringify(payload)
         });

@@ -38,13 +38,29 @@
     {% endwith %}
 
     <script>
+      /**
+       * Read the CSRF token that Flask-JWT-Extended sets as a readable
+       * (non-HttpOnly) cookie called `csrf_access_token`.
+       * Required as the X-CSRF-TOKEN header on every mutating (POST/PUT/DELETE)
+       * request when JWT_COOKIE_CSRF_PROTECT=true (i.e. production HTTPS).
+       */
+      function getCsrfToken() {
+        const match = document.cookie
+          .split('; ')
+          .find(row => row.startsWith('csrf_access_token='));
+        return match ? match.split('=')[1] : '';
+      }
+
       async function doLogout() {
         const btn = document.getElementById("logoutBtn");
         if (btn) { btn.disabled = true; btn.innerText = "Logging out…"; }
         try {
           await fetch("/auth/api/logout", {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: {
+              "Content-Type": "application/json",
+              "X-CSRF-TOKEN": getCsrfToken(),
+            },
             credentials: "same-origin",
           });
         } catch (_) {}

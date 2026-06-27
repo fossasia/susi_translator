@@ -231,6 +231,14 @@
 </div>
 
 <script>
+  /** Read the Flask-JWT-Extended CSRF cookie for use in mutating requests. */
+  function getCsrfToken() {
+    const match = document.cookie
+      .split('; ')
+      .find(row => row.startsWith('csrf_access_token='));
+    return match ? match.split('=')[1] : '';
+  }
+
   document.addEventListener("keydown", function(e) {
     if (e.key === "Enter") doLogin();
   });
@@ -254,7 +262,10 @@
     try {
       const res  = await fetch("/auth/api/login", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          "X-CSRF-TOKEN": getCsrfToken(),
+        },
         body: JSON.stringify({ email, password }),
         credentials: "same-origin",
       });

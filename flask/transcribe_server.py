@@ -136,8 +136,10 @@ _INTERNAL_TOKEN_EXPIRY: timedelta = timedelta(
 )
 
 from auth.models import db
+from flask_migrate import Migrate
 
 db.init_app(app)
+migrate = Migrate(app, db)
 jwt = JWTManager(app)
 
 @jwt.token_in_blocklist_loader
@@ -936,18 +938,6 @@ def configure_provider():
         if old_proc:
             _kill_grabber(old_proc, tenant_id)
 
-        #Database update ONLY after everything else succeeds
-        if email:
-            room = db.session.get(Room, tenant_id)
-            if room:
-                room.configured = True
-                room.stream_type = stream_type
-                room.stream_url = stream_url
-                db.session.commit()
-                logger.info(f"[Configure] Room {tenant_id} saved to DB: configured=True, stream_type={stream_type}, stream_url={stream_url!r}")
-            else:
-                logger.warning(f"[Configure] Room {tenant_id} NOT found in DB — cannot mark as configured!")
-
         configured = []
         if transcription:
             configured.append(f"transcription='{transcription.get('provider_name')}'")
@@ -999,8 +989,8 @@ def configure_provider():
                     logger.info(f"Using YouTube cookies file at {cookies_path}")
                     cmd.extend(["--cookies", cookies_path])
 
-
-
+            # Spawn BEFORE committing to DB so a spawn failure doesn't leave
+            # configured=True in the DB with no active grabber process.
             proc = subprocess.Popen(
                 cmd,
                 cwd=os.path.dirname(os.path.abspath(__file__)),
@@ -1010,7 +1000,32 @@ def configure_provider():
             with grabber_lock:
                 grabber_processes[tenant_id] = proc
 
+            # Grabber is running — now it is safe to persist configured=True.
+            if email:
+                room = db.session.get(Room, tenant_id)
+                if room:
+                    room.configured = True
+                    room.stream_type = stream_type
+                    room.stream_url = stream_url
+                    db.session.commit()
+                    logger.info(f"[Configure] Room {tenant_id} saved to DB: configured=True, stream_type={stream_type}, stream_url={stream_url!r}")
+                else:
+                    logger.warning(f"[Configure] Room {tenant_id} NOT found in DB — cannot mark as configured!")
+        else:
+            # No grabber to spawn — no Popen risk, safe to commit immediately.
+            if email:
+                room = db.session.get(Room, tenant_id)
+                if room:
+                    room.configured = True
+                    room.stream_type = stream_type
+                    room.stream_url = stream_url
+                    db.session.commit()
+                    logger.info(f"[Configure] Room {tenant_id} saved to DB: configured=True (provider-only)")
+                else:
+                    logger.warning(f"[Configure] Room {tenant_id} NOT found in DB — cannot mark as configured!")
+
         # Check if pipeline is already ready (models pre-loaded in memory).
+
         # If so, include it in the response so the frontend can skip polling entirely.
         pipeline_ready = registry.is_pipeline_ready(tenant_id)
         return jsonify({
