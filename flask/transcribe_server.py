@@ -1051,7 +1051,9 @@ def translate_stream():
     _assert_tenant_ownership(tenant_id)
 
     target_lang = request.args.get('target_lang')
-    if not target_lang:
+    if target_lang == 'original':
+        target_lang = None
+    elif not target_lang:
         target_lang = registry.get_language_config(tenant_id).get('target_lang')
     last_chunk_id = _parse_int_arg(request.args, 'last_chunk_id', default=0)
 
@@ -1170,7 +1172,9 @@ def _translate_stream_ws_handler(ws):
 
     source = request.args.get('source', 'mic')
     target_lang = request.args.get('target_lang')
-    if not target_lang:
+    if target_lang == 'original':
+        target_lang = None
+    elif not target_lang:
         target_lang = registry.get_language_config(tenant_id).get('target_lang')
     last_chunk_id = _parse_int_arg(request.args, 'last_chunk_id', default=0)
 
@@ -1695,7 +1699,10 @@ def stream_page(tenant_id: str):
     audio_file_url = ""
     if stream_type == "file":
         audio_file_url = url_for("serve_audio_file", tenant_id=tenant_id)
-    return render_template("stream.html", tenant_id=tenant_id, video_url=video_url, stream_type=stream_type, audio_file_url=audio_file_url)
+        
+    translations_enabled = registry.get_provider_name(tenant_id, role="translation") is not None
+    
+    return render_template("stream.html", tenant_id=tenant_id, video_url=video_url, stream_type=stream_type, audio_file_url=audio_file_url, translations_enabled=translations_enabled)
 
 
 if __name__ == '__main__':

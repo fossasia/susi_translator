@@ -57,6 +57,7 @@
             <div class="captions-header">
                 <h3>Real Time Transcript</h3>
                 <div class="captions-controls">
+                    {% if translations_enabled %}
                     <div class="lang-selector-group">
                         <label for="viewer-lang-select">My Language</label>
                         <select id="viewer-lang-select">
@@ -75,6 +76,7 @@
                             <option value="it">Italian</option>
                         </select>
                     </div>
+                    {% endif %}
                     <div class="audio-toggle-wrapper">
                         <label class="switch">
                             <input type="checkbox" id="audio-toggle-checkbox">
