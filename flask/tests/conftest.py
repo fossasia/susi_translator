@@ -47,7 +47,6 @@ def ts():
 @pytest.fixture(autouse=True)
 def setup_db(ts):
     """Ensure every test runs on a fresh, isolated in-memory database."""
-    ts.app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///:memory:"
     with ts.app.app_context():
         ts.db.create_all()
         yield
