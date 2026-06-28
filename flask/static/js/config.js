@@ -38,14 +38,13 @@ function onStreamTypeChange() {
 function toggleTranslation() {
     const checkbox = document.getElementById('translation-toggle');
     const section = document.getElementById('translation-section');
-    const translationModel = document.getElementById('translation-model');
-    
+    const tmSelect = document.getElementById('translation-model');
     if (checkbox.checked) {
         section.classList.remove('hidden');
-        if (translationModel) translationModel.required = true;
+        if (tmSelect) tmSelect.disabled = false;
     } else {
         section.classList.add('hidden');
-        if (translationModel) translationModel.required = false;
+        if (tmSelect) tmSelect.disabled = true;
     }
 }
 

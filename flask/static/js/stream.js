@@ -139,7 +139,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Restore previously chosen language from localStorage (per-room preference)
     const savedLang = localStorage.getItem(`susi_lang_${TENANT_ID}`);
-    if (savedLang) langSelect.value = savedLang;
+    if (savedLang && langSelect) langSelect.value = savedLang;
 
     let eventSource = null;   // active SSE connection (fallback)
     let wsSocket = null;       // active WebSocket connection (primary)
@@ -170,7 +170,8 @@ document.addEventListener('DOMContentLoaded', () => {
     // Shared URL builders
     function buildQueryString(targetLang) {
         let qs = `tenant_id=${TENANT_ID}&source=${encodeURIComponent(STREAM_TYPE)}&last_chunk_id=${lastChunkId}&audio=${playAudio}`;
-        if (targetLang) qs += `&target_lang=${encodeURIComponent(targetLang)}`;
+        if (!targetLang) targetLang = 'original';
+        qs += `&target_lang=${encodeURIComponent(targetLang)}`;
         return qs;
     }
 
@@ -238,7 +239,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         block.querySelector('.transcript-text').innerText = data.transcript;
         const translEl = block.querySelector('.translation-text');
-        if (data.translation && langSelect.value !== '') {
+        if (data.translation && langSelect && langSelect.value !== '') {
             translEl.innerText = data.translation;
             translEl.style.display = '';
         } else {
@@ -283,7 +284,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         usingWebSocket = false;
-        const targetLang = langSelect.value;
+        const targetLang = langSelect ? langSelect.value : '';
         statusText.innerText = 'Connecting (SSE)...';
         pulseDot.classList.remove('connected', 'error');
 
@@ -291,7 +292,7 @@ document.addEventListener('DOMContentLoaded', () => {
         eventSource = currentSse;
 
         currentSse.onopen = () => {
-            statusText.innerText = targetLang
+            statusText.innerText = (targetLang && langSelect)
                 ? `Connected — translating to ${langSelect.options[langSelect.selectedIndex].text}`
                 : 'Connected — transcript only';
             pulseDot.classList.add('connected');
@@ -321,7 +322,7 @@ document.addEventListener('DOMContentLoaded', () => {
             eventSource = null;
         }
 
-        const targetLang = langSelect.value;
+        const targetLang = langSelect ? langSelect.value : '';
         statusText.innerText = 'Connecting...';
         pulseDot.classList.remove('connected', 'error');
 
@@ -347,7 +348,7 @@ document.addEventListener('DOMContentLoaded', () => {
         currentWs.onopen = () => {
             wsConnected = true;
             usingWebSocket = true;
-            statusText.innerText = targetLang
+            statusText.innerText = (targetLang && langSelect)
                 ? `Connected — translating to ${langSelect.options[langSelect.selectedIndex].text}`
                 : 'Connected — transcript only';
             pulseDot.classList.add('connected');
@@ -444,20 +445,15 @@ document.addEventListener('DOMContentLoaded', () => {
         connect();
     }
     // Reconnect when viewer picks a different language.
-    langSelect.addEventListener('change', () => {
-        stopAndClearAudio();
-        
-        const chosen = langSelect.value;
-        localStorage.setItem(`susi_lang_${TENANT_ID}`, chosen);
-        
-        if (!chosen) {
-            document.querySelectorAll('.translation-text').forEach(el => {
-                el.style.display = 'none';
-            });
-        }
-        
-        connect();
-    });
+    if (langSelect) {
+        langSelect.addEventListener('change', () => {
+            stopAndClearAudio();
+            
+            const chosen = langSelect.value;
+            localStorage.setItem(`susi_lang_${TENANT_ID}`, chosen);
+            connect();
+        });
+    }
 
     // Download Button
     document.getElementById('download-btn').addEventListener('click', () => {
@@ -488,8 +484,8 @@ document.addEventListener('DOMContentLoaded', () => {
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        const lang = langSelect.value ? `_${langSelect.value}` : '';
-        a.download = `room_${TENANT_ID}_transcript${lang}.txt`;
+        const lang = (langSelect && langSelect.value) ? `_${langSelect.value}` : '';
+        a.download = `susi_transcript_${TENANT_ID}${lang}.txt`;
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
