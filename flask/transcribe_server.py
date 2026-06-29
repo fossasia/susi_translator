@@ -195,7 +195,43 @@ _supertonic_tts = None
 _tts_lock = threading.Lock()
 tts_inference_lock = threading.Lock()
 tts_executor = ThreadPoolExecutor(max_workers=1)
-tts_cache = OrderedDict()  # type: OrderedDict[tuple[str, str], str|None]
+class SizeBoundedTTSCache:
+    def __init__(self, max_size_bytes=50 * 1024 * 1024):
+        self.cache = OrderedDict()
+        self.max_size_bytes = max_size_bytes
+        self.current_size = 0
+        self.lock = threading.Lock()
+
+    def _size_of(self, value):
+        return len(value) if isinstance(value, str) and value not in ('pending', 'failed') else 0
+
+    def __setitem__(self, key, value):
+        with self.lock:
+            old_val = self.cache.pop(key, None)
+            self.current_size -= self._size_of(old_val)
+            
+            self.cache[key] = value
+            self.current_size += self._size_of(value)
+            
+            while self.current_size > self.max_size_bytes and self.cache:
+                _, v = self.cache.popitem(last=False)
+                self.current_size -= self._size_of(v)
+
+    def get(self, key, default=None):
+        with self.lock:
+            return self.cache.get(key, default)
+
+    def pop(self, key, default=None):
+        with self.lock:
+            val = self.cache.pop(key, default)
+            self.current_size -= self._size_of(val)
+            return val
+            
+    def __len__(self):
+        with self.lock:
+            return len(self.cache)
+
+tts_cache = SizeBoundedTTSCache(max_size_bytes=50 * 1024 * 1024)
 latest_tts_requests = {}  # type: dict[str, str]
 def get_tts_engine():
     global _supertonic_tts
@@ -263,17 +299,15 @@ def _async_generate_tts(text, target_lang, cache_key, chunk_id=None):
     if chunk_id is not None:
         if latest_tts_requests.get(chunk_id) != text:
             # A newer request for this chunk is queued. Skip this obsolete one!
-            tts_cache[cache_key] = None
+            tts_cache.pop(cache_key, None)
             return
 
     try:
         audio_b64 = generate_tts_sync(text, target_lang)
         tts_cache[cache_key] = audio_b64
-        if len(tts_cache) > 1000:
-            tts_cache.popitem(last=False)
     except Exception as e:
         logger.error(f"Async TTS Error: {e}", exc_info=True)
-        tts_cache[cache_key] = None
+        tts_cache[cache_key] = 'failed'
 
 
 
@@ -1210,7 +1244,7 @@ def translate_stream():
                             cache_key = (lang_to_speak, tts_text)
                             cached_audio = tts_cache.get(cache_key)
                             
-                            if cached_audio == 'pending':
+                            if cached_audio in ('pending', 'failed'):
                                 pass
                             elif cached_audio is not None:
                                 audio_b64 = cached_audio
@@ -1219,8 +1253,6 @@ def translate_stream():
                             else:
                                 latest_tts_requests[cid] = tts_text
                                 tts_cache[cache_key] = 'pending'
-                                if len(tts_cache) > 1000:
-                                    tts_cache.popitem(last=False)
                                 tts_executor.submit(_async_generate_tts, tts_text, lang_to_speak, cache_key, cid)
 
                         if is_ready_update or needs_audio_update:
