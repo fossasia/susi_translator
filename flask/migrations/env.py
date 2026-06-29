@@ -5,21 +5,24 @@ from flask import current_app
 
 from alembic import context
 
-
+# this is the Alembic Config object, which provides
+# access to the values within the .ini file in use.
 config = context.config
 
-# Interpret the config file for Python logging
-fileConfig(config.config_file_name)
+# Interpret the config file for Python logging.
+# This line sets up loggers basically.
+if config.config_file_name is not None:
+    fileConfig(config.config_file_name)
 logger = logging.getLogger('alembic.env')
 
 
 def get_engine():
     try:
         # this works with Flask-SQLAlchemy<3 and Alchemical
-        return current_app.extensions['migrate'].db.get_engine()
+        return current_app.extensions['migrate'].db.engine
     except (TypeError, AttributeError):
         # this works with Flask-SQLAlchemy>=3
-        return current_app.extensions['migrate'].db.engine
+        return current_app.extensions['migrate'].db.engines[None]
 
 
 def get_engine_url():
@@ -28,23 +31,6 @@ def get_engine_url():
             '%', '%%')
     except AttributeError:
         return str(get_engine().url).replace('%', '%%')
-
-
-import os
-
-def _next_rev_id() -> str:
-    """Return the next zero-padded revision number based on existing files."""
-    versions_dir = os.path.join(os.path.dirname(__file__), "versions")
-    max_num = 0
-    if os.path.isdir(versions_dir):
-        for name in os.listdir(versions_dir):
-            if name.endswith(".py") and not name.startswith("__"):
-                try:
-                    num = int(name.split("_", 1)[0])
-                    max_num = max(max_num, num)
-                except ValueError:
-                    pass
-    return f"{max_num + 1:03d}"
 
 
 # add your model's MetaData object here
@@ -66,7 +52,7 @@ def get_metadata():
     return target_db.metadata
 
 
-def run_migrations_offline():
+def run_migrations_offline() -> None:
     """Run migrations in 'offline' mode.
 
     This configures the context with just a URL
@@ -80,14 +66,17 @@ def run_migrations_offline():
     """
     url = config.get_main_option("sqlalchemy.url")
     context.configure(
-        url=url, target_metadata=get_metadata(), literal_binds=True
+        url=url,
+        target_metadata=get_metadata(),
+        literal_binds=True,
+        dialect_opts={"paramstyle": "named"},
     )
 
     with context.begin_transaction():
         context.run_migrations()
 
 
-def run_migrations_online():
+def run_migrations_online() -> None:
     """Run migrations in 'online' mode.
 
     In this scenario we need to create an Engine
@@ -104,8 +93,6 @@ def run_migrations_online():
             if script.upgrade_ops.is_empty():
                 directives[:] = []
                 logger.info('No changes in schema detected.')
-            else:
-                script.rev_id = _next_rev_id()
 
     conf_args = current_app.extensions['migrate'].configure_args
     if conf_args.get("process_revision_directives") is None:

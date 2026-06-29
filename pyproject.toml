@@ -25,12 +25,15 @@ dependencies = [
     "openai-whisper",
     "pyaudio",
     "pybars3",
+    "pydub",
     "python-dotenv",
     "requests",
     "scipy",
     "torch",
     "transformers",
     "yt-dlp",
+    "cryptography>=49.0.0",
+    "pyopenssl>=24.0.0",
 ]
 
 [tool.uv]

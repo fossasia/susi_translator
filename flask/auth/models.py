@@ -21,3 +21,15 @@ class TokenBlocklist(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     jti = db.Column(db.String(36), nullable=False, index=True)
     created_at = db.Column(db.DateTime, server_default=db.func.now(), nullable=False)
+
+class Room(db.Model):
+    __tablename__ = "rooms"
+    
+    tenant_id = db.Column(db.String(36), primary_key=True)
+    name = db.Column(db.String(255), nullable=False)
+    organizer_id = db.Column(db.Integer, db.ForeignKey('organizers.id'), nullable=False)
+    source = db.Column(db.String(50), nullable=True)
+    stream_type = db.Column(db.String(50), nullable=True)
+    stream_url = db.Column(db.Text, nullable=True)
+    configured = db.Column(db.Boolean, default=False)
+    created_at = db.Column(db.DateTime, server_default=db.func.now())
