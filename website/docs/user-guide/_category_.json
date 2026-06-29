@@ -1,0 +1,8 @@
+{
+  "label": "User Guide",
+  "position": 2,
+  "link": {
+    "type": "generated-index",
+    "description": "Comprehensive guide on how to operate and manage SUSI Translator events."
+  }
+}
