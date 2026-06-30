@@ -24,3 +24,8 @@ flask/tone.pcm
 *.pcm
 *.mp3
 flask/instance/
+
+
+website/node_modules/
+website/build/
+website/.docusaurus/

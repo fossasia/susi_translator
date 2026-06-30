@@ -1,0 +1,8 @@
+{
+  "label": "API Reference",
+  "position": 5,
+  "link": {
+    "type": "generated-index",
+    "description": "API endpoints and WebSocket documentation for SUSI Translator"
+  }
+}
