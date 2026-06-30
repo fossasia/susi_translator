@@ -232,7 +232,21 @@ class SizeBoundedTTSCache:
             return len(self.cache)
 
 tts_cache = SizeBoundedTTSCache(max_size_bytes=50 * 1024 * 1024)
-latest_tts_requests = {}  # type: dict[str, str]
+class SizeBoundedDict:
+    def __init__(self, max_items=1000):
+        self.d = OrderedDict()
+        self.max_items = max_items
+        self.lock = threading.Lock()
+    def __setitem__(self, key, value):
+        with self.lock:
+            self.d[key] = value
+            if len(self.d) > self.max_items:
+                self.d.popitem(last=False)
+    def get(self, key, default=None):
+        with self.lock:
+            return self.d.get(key, default)
+
+latest_tts_requests = SizeBoundedDict(max_items=1000)
 def get_tts_engine():
     global _supertonic_tts
     if _supertonic_tts is None:
@@ -295,16 +309,19 @@ def generate_tts_sync(text, target_lang):
         logger.error(f"TTS Error: {e}", exc_info=True)
         return None
 
-def _async_generate_tts(text, target_lang, cache_key, chunk_id=None):
-    if chunk_id is not None:
-        if latest_tts_requests.get(chunk_id) != text:
+def _async_generate_tts(text, target_lang, cache_key, chunk_id=None, tenant_id=None):
+    if chunk_id is not None and tenant_id is not None:
+        if latest_tts_requests.get((tenant_id, chunk_id)) != text:
             # A newer request for this chunk is queued. Skip this obsolete one!
             tts_cache.pop(cache_key, None)
             return
 
     try:
         audio_b64 = generate_tts_sync(text, target_lang)
-        tts_cache[cache_key] = audio_b64
+        if audio_b64 is None:
+            tts_cache[cache_key] = 'failed'
+        else:
+            tts_cache[cache_key] = audio_b64
     except Exception as e:
         logger.error(f"Async TTS Error: {e}", exc_info=True)
         tts_cache[cache_key] = 'failed'
@@ -1251,9 +1268,9 @@ def translate_stream():
                                 if sent_audio.get(cid) != tts_text:
                                     needs_audio_update = True
                             else:
-                                latest_tts_requests[cid] = tts_text
+                                latest_tts_requests[(tenant_id, cid)] = tts_text
                                 tts_cache[cache_key] = 'pending'
-                                tts_executor.submit(_async_generate_tts, tts_text, lang_to_speak, cache_key, cid)
+                                tts_executor.submit(_async_generate_tts, tts_text, lang_to_speak, cache_key, cid, tenant_id)
 
                         if is_ready_update or needs_audio_update:
                             payload = {
