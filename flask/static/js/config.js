@@ -38,10 +38,14 @@ function onStreamTypeChange() {
 function toggleTranslation() {
     const checkbox = document.getElementById('translation-toggle');
     const section = document.getElementById('translation-section');
+    const translationModel = document.getElementById('translation-model');
+    
     if (checkbox.checked) {
         section.classList.remove('hidden');
+        if (translationModel) translationModel.required = true;
     } else {
         section.classList.add('hidden');
+        if (translationModel) translationModel.required = false;
     }
 }
 
@@ -61,6 +65,9 @@ function onTranslationModelChange() {
 
 
 document.addEventListener('DOMContentLoaded', async () => {
+    // Sync initial state of translation toggle
+    toggleTranslation();
+
     // Auto-redirect if the room was already configured (e.g. user pressed back button)
     // unless they explicitly arrived here via the Edit button.
     const urlParams = new URLSearchParams(window.location.search);

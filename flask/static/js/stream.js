@@ -1,4 +1,5 @@
 document.addEventListener('DOMContentLoaded', () => {
+    let waveSurferInstance = null;
 
     //Embed the YouTube Video
     const ytPlayer = document.getElementById('yt-player');
@@ -66,6 +67,7 @@ document.addEventListener('DOMContentLoaded', () => {
             normalize: true,
             url: AUDIO_FILE_URL,
         });
+        waveSurferInstance = ws;
 
         const playBtn = document.getElementById('ws-play-btn');
         const playIcon = document.getElementById('ws-play-icon');
@@ -161,7 +163,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function buildSseUrl(targetLang) {
         let url = `/api/v1/translate/stream?tenant_id=${TENANT_ID}&source=${encodeURIComponent(STREAM_TYPE)}&last_chunk_id=${lastChunkId}&audio=${playAudio}`;
-        if (targetLang) url += `&target_lang=${encodeURIComponent(targetLang)}`;
+        if (targetLang) {
+            url += `&target_lang=${encodeURIComponent(targetLang)}`;
+        } else {
+            url += `&target_lang=original`;
+        }
         return url;
     }
 
@@ -225,12 +231,17 @@ document.addEventListener('DOMContentLoaded', () => {
 
                 block.appendChild(transcriptEl);
                 block.appendChild(translationEl);
+                
+                if (playAudio) {
+                    block.style.display = 'none';
+                }
+                
                 captionsBox.appendChild(block);
             }
 
             block.querySelector('.transcript-text').innerText = data.transcript;
             const translEl = block.querySelector('.translation-text');
-            if (data.translation) {
+            if (data.translation && langSelect.value !== '') {
                 translEl.innerText = data.translation;
                 translEl.style.display = '';
             } else {
@@ -239,7 +250,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
             // Push audio to queue if present
             if (playAudio && data.audio_b64) {
-                const audioUrl = `data:audio/mp3;base64,${data.audio_b64}`;
+                const audioUrl = `data:audio/wav;base64,${data.audio_b64}`;
                 
                 // Remove any pending audio in the queue for this exact chunk
                 audioQueue = audioQueue.filter(item => item.id !== data.chunk_id);
@@ -276,6 +287,17 @@ document.addEventListener('DOMContentLoaded', () => {
         isPlaying = true;
         const nextItem = audioQueue.shift();
         currentAudioId = nextItem.id;
+        
+        // Unhide this block and any preceding hidden blocks to sync text with audio
+        const allBlocks = document.querySelectorAll('.caption-block');
+        for (const b of allBlocks) {
+            b.style.display = '';
+            if (b.id === `chunk-${currentAudioId}`) {
+                break;
+            }
+        }
+        captionsBox.scrollTop = captionsBox.scrollHeight;
+
         currentAudio = new Audio(nextItem.url);
         
         currentAudio.onended = () => {
@@ -317,7 +339,11 @@ document.addEventListener('DOMContentLoaded', () => {
         const chosen = langSelect.value;
         localStorage.setItem(`susi_lang_${TENANT_ID}`, chosen);
         
-        // Removed captionsBox.innerHTML clear so past transcripts remain
+        if (!chosen) {
+            document.querySelectorAll('.translation-text').forEach(el => {
+                el.style.display = 'none';
+            });
+        }
         
         connect();
     });
@@ -367,12 +393,20 @@ document.addEventListener('DOMContentLoaded', () => {
         audioToggleCheckbox.addEventListener('change', (e) => {
             playAudio = e.target.checked;
             if (playAudio) {
-                audioToggleLabel.innerText = '🔊 TTS Active';
+                audioToggleLabel.innerText = 'TTS Active';
                 audioToggleLabel.style.color = '#16a34a'; // green
+                if (waveSurferInstance) waveSurferInstance.setVolume(0);
             } else {
-                audioToggleLabel.innerText = '🔇 TTS Muted';
+                audioToggleLabel.innerText = 'TTS Muted';
                 audioToggleLabel.style.color = '#5a6a8a';
+                if (waveSurferInstance) waveSurferInstance.setVolume(1);
                 stopAndClearAudio(); // Clear queue on mute
+                
+                // Unhide any blocks that were waiting for audio
+                document.querySelectorAll('.caption-block').forEach(b => {
+                    b.style.display = '';
+                });
+                captionsBox.scrollTop = captionsBox.scrollHeight;
             }
             connect(); // reconnect to inform backend to start/stop generating audio
         });

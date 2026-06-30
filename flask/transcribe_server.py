@@ -9,6 +9,8 @@ import threading
 import requests
 import logging
 import base64
+import soundfile as sf
+from collections import OrderedDict
 import json
 import queue
 import signal
@@ -20,6 +22,7 @@ import wave
 import io
 import os
 import atexit
+from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 from dotenv import load_dotenv
 
@@ -186,6 +189,143 @@ VALID_SOURCES = {"mic", "file", "url", "stdin", "youtube", "unspecified"}
 latest_session_by_source = {s: None for s in VALID_SOURCES}
 session_lock = threading.Lock()
 SESSION_TTL_SECONDS = int(os.getenv('SESSION_TTL_SECONDS', '7200'))
+
+#TTS 
+_supertonic_tts = None
+_tts_lock = threading.Lock()
+tts_inference_lock = threading.Lock()
+tts_executor = ThreadPoolExecutor(max_workers=1)
+class SizeBoundedTTSCache:
+    def __init__(self, max_size_bytes=50 * 1024 * 1024):
+        self.cache = OrderedDict()
+        self.max_size_bytes = max_size_bytes
+        self.current_size = 0
+        self.lock = threading.Lock()
+
+    def _size_of(self, value):
+        return len(value) if isinstance(value, str) and value not in ('pending', 'failed') else 0
+
+    def __setitem__(self, key, value):
+        with self.lock:
+            old_val = self.cache.pop(key, None)
+            self.current_size -= self._size_of(old_val)
+            
+            self.cache[key] = value
+            self.current_size += self._size_of(value)
+            
+            while self.current_size > self.max_size_bytes and self.cache:
+                _, v = self.cache.popitem(last=False)
+                self.current_size -= self._size_of(v)
+
+    def get(self, key, default=None):
+        with self.lock:
+            return self.cache.get(key, default)
+
+    def pop(self, key, default=None):
+        with self.lock:
+            val = self.cache.pop(key, default)
+            self.current_size -= self._size_of(val)
+            return val
+            
+    def __len__(self):
+        with self.lock:
+            return len(self.cache)
+
+tts_cache = SizeBoundedTTSCache(max_size_bytes=50 * 1024 * 1024)
+class SizeBoundedDict:
+    def __init__(self, max_items=1000):
+        self.d = OrderedDict()
+        self.max_items = max_items
+        self.lock = threading.Lock()
+    def __setitem__(self, key, value):
+        with self.lock:
+            self.d[key] = value
+            if len(self.d) > self.max_items:
+                self.d.popitem(last=False)
+    def get(self, key, default=None):
+        with self.lock:
+            return self.d.get(key, default)
+
+latest_tts_requests = SizeBoundedDict(max_items=1000)
+def get_tts_engine():
+    global _supertonic_tts
+    if _supertonic_tts is None:
+        with _tts_lock:
+            if _supertonic_tts is None:
+                from supertonic import TTS
+                _supertonic_tts = TTS(auto_download=True)
+    return _supertonic_tts
+
+SUPERTONIC_SUPPORTED_LANGS = {
+    "ar", "bg", "hr", "cs", "da", "nl", "en", "et", "fi", "fr", 
+    "de", "el", "hi", "hu", "id", "it", "ja", "ko", "lv", "lt", 
+    "pl", "pt", "ro", "ru", "sk", "sl", "es", "sv", "tr", "uk", "vi"
+}
+
+# Map specific languages to different Supertonic voice styles for variety
+TTS_VOICE_STYLES = {
+    "en": "M1",
+    "de": "M2",
+    "fr": "F1",
+    "es": "F2",
+    "hi": "M3",
+    "ar": "M4",
+    "pt": "F3",
+    "ru": "F4",
+    "ja": "F5",
+    "ko": "M5",
+    "it": "M1",
+}
+
+def generate_tts_sync(text, target_lang):
+    if not text.strip():
+        return None
+    try:
+        # Determine language (fallback to language-agnostic "na" if unsupported)
+        lang_tag = target_lang if target_lang in SUPERTONIC_SUPPORTED_LANGS else "na"
+        
+        tts_engine = get_tts_engine()
+        # Get voice style, fallback to F1 if not mapped
+        style_name = TTS_VOICE_STYLES.get(target_lang, "F1")
+        voice_style = tts_engine.get_voice_style(voice_name=style_name)
+        
+        with tts_inference_lock:
+            wav, duration = tts_engine.synthesize(
+                text=text, 
+                lang=lang_tag, 
+                voice_style=voice_style,
+                total_steps=8,  # Default medium quality
+                speed=1.0
+            )
+        
+        # Supertonic outputs a numpy array. Convert to 16-bit PCM WAV.
+        buf = io.BytesIO()
+        sample_rate = getattr(tts_engine, 'sample_rate', 44100)
+        sf.write(buf, wav.squeeze(), sample_rate, format='WAV', subtype='PCM_16')
+        audio_bytes = buf.getvalue()
+        
+        return base64.b64encode(audio_bytes).decode('utf-8')
+    except Exception as e:
+        logger.error(f"TTS Error: {e}", exc_info=True)
+        return None
+
+def _async_generate_tts(text, target_lang, cache_key, chunk_id=None, tenant_id=None):
+    if chunk_id is not None and tenant_id is not None:
+        if latest_tts_requests.get((tenant_id, chunk_id)) != text:
+            # A newer request for this chunk is queued. Skip this obsolete one!
+            tts_cache.pop(cache_key, None)
+            return
+
+    try:
+        audio_b64 = generate_tts_sync(text, target_lang)
+        if audio_b64 is None:
+            tts_cache[cache_key] = 'failed'
+        else:
+            tts_cache[cache_key] = audio_b64
+    except Exception as e:
+        logger.error(f"Async TTS Error: {e}", exc_info=True)
+        tts_cache[cache_key] = 'failed'
+
 
 
 # Small helper functions
@@ -1054,15 +1194,19 @@ def translate_stream():
     _assert_tenant_ownership(tenant_id)
 
     target_lang = request.args.get('target_lang')
-    if not target_lang:
+    if target_lang == 'original':
+        target_lang = None
+    elif not target_lang:
         target_lang = registry.get_language_config(tenant_id).get('target_lang')
     last_chunk_id = _parse_int_arg(request.args, 'last_chunk_id', default=0)
+    wants_audio = request.args.get('audio', 'false').lower() == 'true'
 
     def event_stream():
         sent_transcripts = {}
         translated_transcripts = {}
         last_translations = {}
         last_translation_time = 0.0
+        sent_audio = {}
 
         yield f"data: {json.dumps({'status': 'connected'})}\n\n"
 
@@ -1083,36 +1227,64 @@ def translate_stream():
                     cid_int = _chunk_id_int(cid)
                     if cid_int >= last_chunk_id:
                         text = tenant_transcripts[cid]['transcript']
-
                         needs_tx_update = sent_transcripts.get(cid) != text
                         needs_tl_update = target_lang and (translated_transcripts.get(cid) != text)
 
-                        if needs_tx_update or needs_tl_update:
-                            translation = last_translations.get(cid, "")
+                        translation = last_translations.get(cid, "")
 
-                            if needs_tl_update and can_translate:
-                                try:
-                                    lang_config = registry.get_language_config(tenant_id)
-                                    source_lang = lang_config.get('source_lang', 'en')
-                                    new_tl = registry.translate(tenant_id, text, source_lang, target_lang)
-                                    if new_tl:
-                                        translation = new_tl
-                                    last_translations[cid] = translation
-                                    translated_transcripts[cid] = text
-                                    last_translation_time = time.time()
-                                    can_translate = False  # Only 1 translation per loop to spread load
-                                except Exception as e:
-                                    logger.error(f"Stream translation error for {tenant_id}: {e}")
+                        if needs_tl_update and can_translate:
+                            try:
+                                lang_config = registry.get_language_config(tenant_id)
+                                source_lang = lang_config.get('source_lang', 'en')
+                                new_tl = registry.translate(tenant_id, text, source_lang, target_lang)
+                                if new_tl:
+                                    translation = new_tl
+                                last_translations[cid] = translation
+                                translated_transcripts[cid] = text
+                                last_translation_time = time.time()
+                                can_translate = False  # Only 1 translation per loop to spread load
+                            except Exception as e:
+                                logger.error(f"Stream translation error for {tenant_id}: {e}")
 
-                            # Send an event if the transcription changed, or if we just
-                            # successfully translated it to match the current transcription.
-                            if needs_tx_update or (needs_tl_update and translated_transcripts.get(cid) == text):
-                                events_to_send.append({
-                                    "chunk_id": cid,
-                                    "transcript": text,
-                                    "translation": translation,
-                                })
-                                sent_transcripts[cid] = text
+                        is_ready_update = needs_tx_update or (needs_tl_update and translated_transcripts.get(cid) == text)
+                        
+                        tts_text = translation if target_lang else text
+                        needs_audio_update = False
+                        audio_b64 = None
+
+                        if wants_audio and tts_text:
+                            # Truncate extremely long texts to prevent CPU DoS during synthesis
+                            if len(tts_text) > 300:
+                                tts_text = tts_text[:297] + "..."
+                            
+                            lang_to_speak = target_lang if target_lang else registry.get_language_config(tenant_id).get('source_lang', 'en')
+                            cache_key = (lang_to_speak, tts_text)
+                            cached_audio = tts_cache.get(cache_key)
+                            
+                            if cached_audio in ('pending', 'failed'):
+                                pass
+                            elif cached_audio is not None:
+                                audio_b64 = cached_audio
+                                if sent_audio.get(cid) != tts_text:
+                                    needs_audio_update = True
+                            else:
+                                latest_tts_requests[(tenant_id, cid)] = tts_text
+                                tts_cache[cache_key] = 'pending'
+                                tts_executor.submit(_async_generate_tts, tts_text, lang_to_speak, cache_key, cid, tenant_id)
+
+                        if is_ready_update or needs_audio_update:
+                            payload = {
+                                "chunk_id": cid,
+                                "transcript": text,
+                                "translation": translation,
+                            }
+                            
+                            if needs_audio_update and audio_b64:
+                                payload["audio_b64"] = audio_b64
+                                sent_audio[cid] = tts_text
+
+                            events_to_send.append(payload)
+                            sent_transcripts[cid] = text
 
                 for payload in events_to_send:
                     yield f"data: {json.dumps(payload)}\n\n"

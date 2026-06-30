@@ -221,3 +221,44 @@ def test_reconfigure_kills_old_grabber_before_spawning_new_one(client, ts) -> No
     # After both calls, only second_proc should be tracked.
     with ts.grabber_lock:
         assert ts.grabber_processes.get("reconfigure_tenant") is second_proc
+
+@patch("transcribe_server.get_tts_engine")
+def test_generate_tts_sync_smoke(mock_get_engine):
+    """Smoke test to ensure TTS base64 conversion does not fail on missing io."""
+    import numpy as np
+    mock_engine = MagicMock()
+    mock_engine.synthesize.return_value = (np.zeros((1, 10)), 1.0)
+    mock_engine.sample_rate = 44100
+    mock_get_engine.return_value = mock_engine
+
+    from transcribe_server import generate_tts_sync
+    result = generate_tts_sync("hello", "en")
+    assert result is not None
+    assert isinstance(result, str)
+    assert len(result) > 0
+
+@patch("transcribe_server._assert_tenant_ownership", return_value=None)
+@patch("auth.decorators.verify_jwt_in_request", return_value=None)
+@patch("auth.decorators.get_jwt", return_value={})
+@patch("transcribe_server.tts_executor")
+@patch("transcribe_server.registry.translate", return_value="hola")
+def test_stream_audio_background_dispatch(mock_translate, mock_executor, mock_jwt, mock_verify, mock_assert, client, ts):
+    """Verify that translate/stream?audio=true dispatches to the background worker."""
+    with ts.transcripts_lock:
+        ts.transcriptd["test-audio-tenant"] = {"0": {"transcript": "hello"}}
+    
+    resp = client.get("/api/v1/translate/stream?tenant_id=test-audio-tenant&audio=true&target_lang=es")
+    
+    iterator = iter(resp.response)
+    lines = []
+    for _ in range(2):
+        try:
+            lines.append(next(iterator))
+        except StopIteration:
+            break
+            
+    assert mock_executor.submit.called
+    args, kwargs = mock_executor.submit.call_args
+    # args is (_async_generate_tts, text, lang, cache_key)
+    assert args[1] == "hola" 
+    assert args[2] == "es"

@@ -27,6 +27,8 @@ A production-ready, real-time speech-to-text (transcription) and translation HTT
 
 ## Setup
 
+**Note on Supertonic TTS**: The server uses Supertonic 3 for text-to-speech audio generation. On the first run, it will automatically download ~250MB of ONNX models to `~/.cache/supertonic3`. If you encounter rate limits or slow downloads, export a free Hugging Face token (`HF_TOKEN`) to your environment.
+
 Use `uv` to automatically create a virtual environment (`.venv/`) and install all required dependencies:
 
 ```bash
