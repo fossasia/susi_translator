@@ -46,7 +46,7 @@ function renderRooms() {
             if (room.configured && room.streamType === 'mic') {
                 window.location.href = `/stream/${room.tenant_id}?url=&type=mic`;
             } else if (room.configured && room.videoUrl) {
-                window.location.href = `/stream/${room.tenant_id}?url=${encodeURIComponent(room.videoUrl)}`;
+                window.location.href = `/stream/${room.tenant_id}?url=${encodeURIComponent(room.videoUrl)}&type=${room.streamType}`;
             } else {
                 window.location.href = `/config/${room.tenant_id}`;
             }
@@ -61,7 +61,7 @@ function openRoom(event, tenant_id) {
     if (room && room.configured && room.streamType === 'mic') {
         window.location.href = `/stream/${tenant_id}?url=&type=mic`;
     } else if (room && room.configured && room.videoUrl) {
-        window.location.href = `/stream/${tenant_id}?url=${encodeURIComponent(room.videoUrl)}`;
+        window.location.href = `/stream/${tenant_id}?url=${encodeURIComponent(room.videoUrl)}&type=${room.streamType}`;
     } else {
         window.location.href = `/config/${tenant_id}`;
     }

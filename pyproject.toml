@@ -18,6 +18,7 @@ dependencies = [
     "flask-migrate",
     "redis>=5.0",
     "flask-restx",
+    "flask-sock>=0.7.0",
     "flask-sqlalchemy>=3.1.1",
     "mkdocs",
     "mkdocs-bootswatch",
