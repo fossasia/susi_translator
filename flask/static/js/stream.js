@@ -293,8 +293,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
         currentSse.onopen = () => {
             statusText.innerText = (targetLang && langSelect)
-                ? `Connected — translating to ${langSelect.options[langSelect.selectedIndex].text}`
-                : 'Connected — transcript only';
+                ? `Connected translating to ${langSelect.options[langSelect.selectedIndex].text}`
+                : 'Connected transcript only';
             pulseDot.classList.add('connected');
         };
 
@@ -304,7 +304,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         currentSse.onerror = () => {
             if (eventSource !== currentSse) return;
-            statusText.innerText = 'Connection Lost - Reconnecting...';
+            statusText.innerText = 'Connection Lost Reconnecting...';
             pulseDot.classList.remove('connected');
             pulseDot.classList.add('error');
             // EventSource handles its own reconnect; no extra action needed here.
@@ -328,7 +328,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // Guard: browsers that don't support WebSocket fall straight to SSE
         if (typeof WebSocket === 'undefined') {
-            console.info('[stream] WebSocket not supported — using SSE fallback');
+            console.info('[stream] WebSocket not supported using SSE fallback');
             connectSSE();
             return;
         }
@@ -355,6 +355,7 @@ document.addEventListener('DOMContentLoaded', () => {
         };
 
         currentWs.onmessage = (event) => {
+            if (wsSocket !== currentWs) return;  // drop messages from superseded sockets
             try {
                 handleMessage(JSON.parse(event.data));
             } catch (e) {

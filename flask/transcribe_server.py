@@ -1,7 +1,7 @@
 from flask import Flask, request, jsonify, abort, Response, redirect, url_for, render_template
 from flask_restx import Api, Resource, fields
 from flask_cors import CORS
-from flask_jwt_extended import JWTManager, verify_jwt_in_request
+from flask_jwt_extended import JWTManager, verify_jwt_in_request, get_jwt
 from flask_bcrypt import Bcrypt
 from flask_sock import Sock
 from werkzeug.exceptions import HTTPException
@@ -1317,6 +1317,18 @@ def _translate_stream_ws_handler(ws):
         logger.warning(f"WS auth rejected: {exc.__class__.__name__}: {exc}")
         try:
             ws.send(json.dumps({"status": "error", "message": "Authentication required."}))
+        except Exception:
+            pass
+        return
+
+    _ws_claims = get_jwt()
+    if _ws_claims.get("role") == "internal":
+        logger.warning(
+            f"Internal token rejected for WS /ws/v1/translate/stream "
+            f"(tenant={_ws_claims.get('tenant_id', 'unknown')})"
+        )
+        try:
+            ws.send(json.dumps({"status": "error", "message": "Forbidden."}))
         except Exception:
             pass
         return
