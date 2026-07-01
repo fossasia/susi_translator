@@ -1,11 +1,6 @@
 """
-FasterWhisperLocalProvider: TranscriptionProvider implementation using
-the faster-whisper library which is backed by the CTranslate2 inference engine.
-
-Key advantages over openai-whisper:
-- INT8 / FP16 quantization: 4x lower memory footprint
-- ~4x faster inference on CPU; ~2x on CUDA
-- No PyTorch required at runtime
+TranscriptionProvider implementation using
+the faster-whisper library backed by the CTranslate2 inference engine
 """
 
 from __future__ import annotations
@@ -21,11 +16,6 @@ logger = logging.getLogger(__name__)
 
 
 class FasterWhisperLocalProvider(TranscriptionProvider):
-    """
-    Wraps faster-whisper (CTranslate2 backend) for local in-process transcription.
-    Fully substitutable for the old WhisperLocalProvider — same config keys,
-    same return contract (plain str).
-    """
 
     def __init__(self, config: Optional[dict] = None):
         super().__init__(config)
@@ -51,10 +41,7 @@ class FasterWhisperLocalProvider(TranscriptionProvider):
         return "faster_whisper"
 
     def is_available(self) -> bool:
-        """
-        Returns True if faster_whisper is importable.
-        faster-whisper ships CTranslate2 as a bundled dependency — no separate check needed.
-        """
+    
         try:
             import faster_whisper  # noqa: F401
             return True
@@ -63,11 +50,7 @@ class FasterWhisperLocalProvider(TranscriptionProvider):
 
     def load_model(self) -> None:
         """
-        Load the faster-whisper model into memory.
-        Called once on the first transcribe() call (lazy) or eagerly by the registry warmup thread.
-
-        faster-whisper automatically downloads the model from HuggingFace Hub on first use
-        and caches it to ~/.cache/huggingface/hub — no manual conversion step required.
+        Load the faster-whisper model into memory
         """
         if self._model is not None:
             logger.info(
@@ -113,8 +96,6 @@ class FasterWhisperLocalProvider(TranscriptionProvider):
         try:
             _load(device, compute_type)
         except RuntimeError as e:
-            # CUDA was detected but runtime libs (libcublas, libcudnn, etc.) are missing.
-            # Transparently fall back to CPU + int8 so the server keeps running.
             _CUDA_LIB_HINTS = ("cannot be loaded", "not found", "libcublas", "libcudnn",
                                "libcurand", "CUDA error", "cudaErrorNoDevice")
             if device == "cuda" and any(h in str(e) for h in _CUDA_LIB_HINTS):
@@ -144,10 +125,7 @@ class FasterWhisperLocalProvider(TranscriptionProvider):
 
     def transcribe(self, audio: np.ndarray, **kwargs: Any) -> str:
         """
-        Transcribe a normalized float32 mono audio array.
-
-        faster-whisper returns a generator of Segment objects; we join them into a single string
-        to match the plain-str contract of the TranscriptionProvider ABC.
+        Transcribe a normalized float32 mono audio array
         """
         if self._model is None:
             self.load_model()
@@ -172,7 +150,7 @@ class FasterWhisperLocalProvider(TranscriptionProvider):
                 temperature=temperature,
                 vad_filter=True,
                 vad_parameters=dict(min_silence_duration_ms=500),
-                # Suppress repetition typical of silence/noise
+                # Suppress repetition typical of silence or, noise
                 no_speech_threshold=0.6,
                 log_prob_threshold=-1.0,
             )
@@ -182,9 +160,7 @@ class FasterWhisperLocalProvider(TranscriptionProvider):
         try:
             return _run_transcribe()
         except RuntimeError as e:
-            # The WhisperModel constructor can succeed even when libcublas is absent —
-            # the error only fires when the CUDA encoder actually runs. Catch it here,
-            # drop the CUDA model, force a CPU reload, and retry once.
+            
             if any(h in str(e) for h in self._CUDA_LIB_HINTS):
                 logger.warning(
                     f"[faster_whisper] CUDA inference failed ({e}). "
