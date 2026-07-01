@@ -1,14 +1,6 @@
 """
 NLLBCTranslate2Provider: TranslationProvider implementation using
-Meta NLLB-200 via CTranslate2 — a quantized, high-performance inference engine.
-
-Key advantages over the HuggingFace transformers backend:
-- INT8 / FP16 quantization: 4x lower memory footprint on CPU
-- ~4x faster inference on CPU; ~2x on CUDA
-- No PyTorch required at runtime for inference
-
-Model conversion is handled automatically on first load using the
-CTranslate2 converter API. Converted models are cached to disk.
+NLLB-200 via CTranslate2, a quantized, high-performance inference engine
 """
 
 from __future__ import annotations
@@ -23,7 +15,7 @@ from providers.base import TranslationProvider, TranslationError, ProviderConfig
 logger = logging.getLogger(__name__)
 
 
-# Shared BCP-47 → NLLB language code mapping
+# Shared BCP-47 to NLLB language code mapping
 # Mirrors the mapping in nllb_local for full language parity
 LANG_CODE_MAP = {
     "en": "eng_Latn",
@@ -48,10 +40,8 @@ def _resolve_lang_code(lang: str) -> str:
 
 def _get_ct2_model_path(model_id: str) -> str:
     """
-    Return the path to a CTranslate2-converted model directory.
-    If the model has not been converted yet, convert it now (one-time operation).
-    Converted models are cached at ~/.cache/ctranslate2/<safe_model_name>_int8/.
-    The model is explicitly quantized to int8 on disk for minimum footprint.
+    Return the path to a CTranslate2 converted model directory,
+    If the model has not been converted yet, convert it and cache it
     """
     safe_name = model_id.replace("/", "_")
     cache_dir = os.path.join(
@@ -65,7 +55,6 @@ def _get_ct2_model_path(model_id: str) -> str:
 
     logger.info(
         f"[nllb_ctranslate2] Converting '{model_id}' to CTranslate2 format... "
-        "This is a one-time operation..."
     )
 
     try:
@@ -86,9 +75,7 @@ def _get_ct2_model_path(model_id: str) -> str:
 
 class NLLBCTranslate2Provider(TranslationProvider):
     """
-    Wraps NLLB-200 via CTranslate2 for high-performance local translation.
-    Uses HuggingFace transformers only for tokenization; CTranslate2 handles inference.
-    Fully substitutable for NLLBLocalProvider — same config keys, same return contract.
+    Wraps NLLB-200 via CTranslate2 for high-performance translation
     """
 
     def __init__(self, config: Optional[dict] = None):
@@ -120,7 +107,7 @@ class NLLBCTranslate2Provider(TranslationProvider):
 
     def load_model(self) -> None:
         """
-        Convert (if needed) and load the CTranslate2 model + HuggingFace tokenizer.
+        Convert and load the CTranslate2 model with HuggingFace tokenizer.
         Auto hardware detection with safe fallback to CPU.
         """
         with self._lock:
@@ -234,6 +221,12 @@ class NLLBCTranslate2Provider(TranslationProvider):
 
         def _run_translate() -> str:
             with self._lock:
+                # _translator may have been nulled by another thread's CUDA fallback
+                if self._translator is None or self._tokenizer is None:
+                    raise TranslationError(
+                        f"[{self.provider_name}] Model not loaded — reload in progress."
+                    )
+
                 # Set source language on the tokenizer for correct special token injection
                 self._tokenizer.src_lang = source_lang
 
@@ -245,24 +238,20 @@ class NLLBCTranslate2Provider(TranslationProvider):
                         "Ensure you are using NLLB BCP-47 codes."
                     )
 
-                # Tokenize to token strings (CTranslate2 operates on token strings, not IDs)
+                # Tokenize to token strings
                 encoded = self._tokenizer(text)
                 input_tokens = self._tokenizer.convert_ids_to_tokens(encoded["input_ids"])
+                results = self._translator.translate_batch(
+                    [input_tokens],
+                    target_prefix=[[target_lang]],
+                    beam_size=self._num_beams,
+                    max_decoding_length=max_decoding_length,
+                    repetition_penalty=1.2,
+                    no_repeat_ngram_size=3,
+                )
 
-            # Translate: force the target language as the first decoded token
-            results = self._translator.translate_batch(
-                [input_tokens],
-                target_prefix=[[target_lang]],
-                beam_size=self._num_beams,
-                max_decoding_length=max_decoding_length,
-                repetition_penalty=1.2,
-                no_repeat_ngram_size=3,
-            )
-
-            # Strip the forced target-lang prefix token before decoding
-            output_tokens = results[0].hypotheses[0][1:]
-            
-            with self._lock:
+                # Strip the forced target-lang prefix token before decoding
+                output_tokens = results[0].hypotheses[0][1:]
                 output_ids = self._tokenizer.convert_tokens_to_ids(output_tokens)
                 result = self._tokenizer.decode(output_ids, skip_special_tokens=True)
             return result.strip()
@@ -270,7 +259,7 @@ class NLLBCTranslate2Provider(TranslationProvider):
         try:
             return _run_translate()
         except RuntimeError as e:
-            # Catch inference-time CUDA missing lib errors
+            # Catch inference time CUDA missing lib errors
             _CUDA_LIB_HINTS = ("cannot be loaded", "not found", "libcublas", "libcudnn",
                                "libcurand", "CUDA error", "cudaErrorNoDevice")
             if any(h in str(e) for h in _CUDA_LIB_HINTS):
@@ -278,7 +267,7 @@ class NLLBCTranslate2Provider(TranslationProvider):
                     if self.device != "cpu":
                         logger.warning(
                             f"[{self.provider_name}] CUDA inference failed ({e}). "
-                            "Dropping model and reloading on CPU/int8 — this will only happen once."
+                            "Dropping model and reloading on CPU, this will only happen once."
                         )
                         self._translator = None
                         self._device_config = "cpu"

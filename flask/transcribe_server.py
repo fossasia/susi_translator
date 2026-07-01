@@ -230,7 +230,8 @@ _grabber_failure_logged: set = set()  # tenant_ids whose crash has already been 
 grabber_lock = threading.Lock()
 
 # FIFO queue of pending audio chunks awaiting transcription.
-audio_stack = queue.Queue()
+# Bounded queue to prevent thundering herd memory exhaustion and timeouts
+audio_stack = queue.Queue(maxsize=30)
 VALID_SOURCES = {"mic", "file", "url", "stdin", "youtube", "unspecified"}
 latest_session_by_source = {s: None for s in VALID_SOURCES}
 session_lock = threading.Lock()
@@ -805,8 +806,14 @@ def _transcribe_logic(success_status: int = 202):
         except Exception:
             return {"error": "Forbidden or invalid tenant scope.", "status": "error"}, 403
 
-    # push to processing queue
-    audio_stack.put((tenant_id, chunk_id, audio_b64))
+    # push to processing queue with a timeout to guard against Thundering Herd
+    import queue as pyqueue
+    try:
+        audio_stack.put((tenant_id, chunk_id, audio_b64), timeout=5.0)
+    except pyqueue.Full:
+        logger.warning(f"Server overloaded: audio_stack is full. Rejecting request for tenant {tenant_id}")
+        return {"error": "Server is currently busy. Please try again in a moment.", "status": "error"}, 429
+
     return {"chunk_id": chunk_id, "tenant_id": tenant_id, "status": "processing"}, success_status
 
 
@@ -2041,6 +2048,28 @@ def stream_page(tenant_id: str):
     return render_template("stream.html", tenant_id=tenant_id, video_url=video_url, stream_type=stream_type, audio_file_url=audio_file_url, translations_enabled=translations_enabled)
 
 
+# Eagerly load the default models when the server starts
+def _eager_load_models():
+    logger.info("Eagerly loading default machine learning models...")
+    try:
+        from providers.registry import _get_or_create_shared_model, _DEFAULT_TRANSCRIPTION_FALLBACK, _DEFAULT_TRANSLATION_FALLBACK
+        t_fallback = _DEFAULT_TRANSCRIPTION_FALLBACK["provider_name"]
+        _get_or_create_shared_model(t_fallback, _DEFAULT_TRANSCRIPTION_FALLBACK["config"]).load_model()
+        logger.info(f"Successfully eager-loaded transcription model: '{t_fallback}'")
+        
+        tx_fallback = _DEFAULT_TRANSLATION_FALLBACK["provider_name"]
+        _get_or_create_shared_model(tx_fallback, _DEFAULT_TRANSLATION_FALLBACK["config"]).load_model()
+        logger.info(f"Successfully eager-loaded translation model: '{tx_fallback}'")
+        
+        # Load Supertonic TTS
+        get_tts_engine()
+        logger.info("Successfully eager-loaded Supertonic TTS engine")
+    except Exception as e:
+        logger.error(f"Failed to eagerly load models: {e}")
+
+_eager_load_models()
+
+
 if __name__ == '__main__':
     # Server bind config is env-driven so the defaults are SAFE:
     host = os.getenv('FLASK_HOST', '127.0.0.1')
@@ -2055,12 +2084,5 @@ if __name__ == '__main__':
             host,
         )
 
-    # use_reloader=False because the audio-worker thread above must not be spawned twice
-    # NOTE: Do NOT use ssl_context='adhoc' in production.
-    # In production, run Flask behind a reverse proxy (Nginx or Caddy) that handles
-    # HTTPS with a real certificate (e.g. Let's Encrypt). Flask serves plain HTTP
-    # on localhost, and the proxy terminates TLS externally.
-    # For local development with mic access (requires HTTPS), you can temporarily
-    # set ssl_context='adhoc' after installing pyopenssl, but never commit that to prod.
-    ssl_ctx = os.getenv('FLASK_SSL_CONTEXT', None)  # set to 'adhoc' only for local dev
+    ssl_ctx = os.getenv('FLASK_SSL_CONTEXT', None)  
     app.run(host=host, port=port, debug=debug, use_reloader=False, ssl_context=ssl_ctx or None)
