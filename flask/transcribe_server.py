@@ -2,7 +2,6 @@ from flask import Flask, request, jsonify, abort, Response, redirect, url_for, r
 from flask_restx import Api, Resource, fields
 from flask_cors import CORS
 from flask_jwt_extended import JWTManager, verify_jwt_in_request
-from flask_bcrypt import Bcrypt
 from werkzeug.exceptions import HTTPException
 import numpy as np
 import threading
@@ -24,7 +23,8 @@ from datetime import timedelta
 from dotenv import load_dotenv
 
 
-from auth.routes import auth_bp, bcrypt
+from auth.routes import auth_bp
+from auth.extensions import bcrypt, limiter
 from auth.decorators import organizer_required
 from flask_admin import Admin
 from auth.admin_panel import SecureModelView, SecureAdminIndexView
@@ -107,7 +107,8 @@ CORS(app, resources={r"/*": {"origins": _cors_origins}}, supports_credentials=Tr
 logger.info(f"CORS allowed origins: {_cors_origins}")
 
 # Database, Auth, JWT 
-app.config["SQLALCHEMY_DATABASE_URI"] = os.getenv("DATABASE_URL", "sqlite:///susi.db")
+_db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "instance", "susi.db")
+app.config["SQLALCHEMY_DATABASE_URI"] = os.getenv("DATABASE_URL", f"sqlite:///{_db_path}")
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 app.config["JWT_SECRET_KEY"] = _require_secret_key("JWT_SECRET_KEY")
 app.secret_key = app.config["JWT_SECRET_KEY"]
@@ -150,8 +151,6 @@ def check_if_token_revoked(jwt_header, jwt_payload: dict) -> bool:
         token = db.session.query(TokenBlocklist.id).filter_by(jti=jti).scalar()
     return token is not None
 bcrypt.init_app(app)
-
-from auth.extensions import limiter
 limiter.init_app(app)
 
 # register auth
