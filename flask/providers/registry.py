@@ -26,12 +26,12 @@ _PROVIDER_FACTORIES: Dict[str, Callable[[Dict[str, Any]], BaseProvider]] = {}
 
 # Fallback used when a tenant skips configuration entirely
 _DEFAULT_TRANSCRIPTION_FALLBACK: Dict[str, Any] = {
-    "provider_name": "whisper_local",
+    "provider_name": "faster_whisper",
     "config": {},
 }
 
 _DEFAULT_TRANSLATION_FALLBACK: Dict[str, Any] = {
-    "provider_name": "nllb_local",
+    "provider_name": "nllb_ctranslate2",
     "config": {},
     "source_lang": "en",
     "target_lang": "es",

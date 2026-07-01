@@ -379,6 +379,86 @@ document.addEventListener('DOMContentLoaded', () => {
                 console.info('[stream] WS dropped after connect (code', event.code, ') — reconnecting via SSE');
                 connectSSE();
             }
+
+            // Track the highest chunk we've received for reconnect continuity
+            const chunkInt = parseInt(data.chunk_id, 10);
+            if (!isNaN(chunkInt) && chunkInt > lastChunkId) {
+                lastChunkId = chunkInt;
+            }
+
+            // For file streams: drop renders when audio is paused to stay in sync
+            if (fileAudioPaused) return;
+
+            // Render transcript + translation blocks
+            let block = document.getElementById(`chunk-${data.chunk_id}`);
+
+            if (!block) {
+                block = document.createElement('div');
+                block.id = `chunk-${data.chunk_id}`;
+                block.className = 'caption-block';
+
+                const transcriptEl = document.createElement('p');
+                transcriptEl.className = 'transcript-text';
+
+                const translationEl = document.createElement('p');
+                translationEl.className = 'translation-text';
+
+                block.appendChild(transcriptEl);
+                block.appendChild(translationEl);
+                
+                if (playAudio) {
+                    block.style.display = 'none';
+                }
+                
+                captionsBox.appendChild(block);
+            }
+
+            block.querySelector('.transcript-text').innerText = data.transcript;
+            const translEl = block.querySelector('.translation-text');
+            if (data.translation && langSelect.value !== '') {
+                translEl.innerText = data.translation;
+                translEl.style.display = '';
+            } else {
+                translEl.style.display = 'none';
+            }
+
+            // Push audio to queue if present
+            if (playAudio && data.audio_b64) {
+                const audioUrl = `data:audio/wav;base64,${data.audio_b64}`;
+                
+                // Remove any pending audio in the queue for this exact chunk
+                audioQueue = audioQueue.filter(item => item.id !== data.chunk_id);
+                
+                // If we are currently playing an older version of this exact chunk, stop it
+                if (isPlaying && currentAudioId === data.chunk_id) {
+                    if (currentAudio) {
+                        currentAudio.pause();
+                        currentAudio.currentTime = 0;
+                        currentAudio = null;
+                    }
+                    isPlaying = false;
+                }
+                
+                // Add the new updated audio to the end of the queue
+                audioQueue.push({ id: data.chunk_id, url: audioUrl });
+                playNextAudio();
+            }
+
+            // Scroll to bottom
+            captionsBox.scrollTop = captionsBox.scrollHeight;
+        };
+
+        eventSource.onerror = () => {
+            statusText.innerText = 'Connection Lost - Reconnecting...';
+            pulseDot.classList.remove('connected');
+            pulseDot.classList.add('error');
+            
+            // Close the current event source to prevent auto-reconnect with stale URL
+            eventSource.close();
+            eventSource = null;
+            
+            // Manually reconnect after a delay to use the updated lastChunkId
+            setTimeout(connect, 3000);
         };
     }
 
