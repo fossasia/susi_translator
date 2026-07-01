@@ -60,15 +60,8 @@
         <div class="form-group">
             <label for="transcription-model">Transcription Model</label>
             <select id="transcription-model" onchange="onTranscriptionModelChange()" required>
-                <option value="" disabled selected>e.g. Whisper Local</option>
-                <option value="whisper_local">Whisper Local</option>
-            </select>
-        </div>
-
-        <div class="form-group" id="whisper-size-group">
-            <label for="model-size">Model Size</label>
-            <select id="model-size">
-                <option value="tiny" selected>Tiny</option>
+                <option value="" disabled selected>e.g. Faster Whisper </option>
+                <option value="faster_whisper">Faster Whisper (Medium)</option>
             </select>
         </div>
 
@@ -88,9 +81,9 @@
 
             <div class="form-group">
                 <label for="translation-model">Translation Model</label>
-                <select id="translation-model" onchange="onTranslationModelChange()" required disabled>
-                    <option value="" disabled selected>e.g. NLLB-200 Local</option>
-                    <option value="nllb_local">NLLB-200 Local</option>
+                <select id="translation-model" onchange="onTranslationModelChange()" required>
+                    <option value="" disabled selected>e.g. NLLB-200</option>
+                    <option value="nllb_ctranslate2">NLLB-200</option>
                 </select>
             </div>
 

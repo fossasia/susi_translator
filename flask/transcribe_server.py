@@ -12,6 +12,7 @@ import requests
 import logging
 import base64
 import soundfile as sf
+import collections
 from collections import OrderedDict
 import json
 import queue
@@ -471,16 +472,8 @@ def _next_payload():
     Pull the next audio payload from audio stack, dropping any superseded
     duplicates so we only transcribe the latest version of each chunk
     """
-    # 192_000 raw bytes = 96_000 int16 samples = 6 seconds at 16kHz
-    # Base64 inflates by 4/3, so we set the threshold to 256_000 encoded characters.
-    _MAX_SKIP_BYTES = 256_000
-
     tenant_id, chunk_id, audiob64 = audio_stack.get()
     while True:
-        # If the current payload is already large, just process it now.
-        current_size = len(audiob64) if audiob64 else 0
-        if current_size >= _MAX_SKIP_BYTES:
-            return tenant_id, chunk_id, audiob64
 
         with audio_stack.mutex:
             has_newer = any(
@@ -1351,22 +1344,104 @@ def translate_stream():
     last_chunk_id = _parse_int_arg(request.args, 'last_chunk_id', default=0)
     wants_audio = request.args.get('audio', 'false').lower() == 'true'
 
-    with stream_connections_lock:
-        current_connections = stream_connections.get(tenant_id, 0)
-        if current_connections >= MAX_STREAM_CONNECTIONS_PER_TENANT:
-            logger.warning(f"Stream connection cap reached for tenant {tenant_id}")
-            return jsonify({"status": "error", "message": "Too many connections."}), 429
-        stream_connections[tenant_id] = current_connections + 1
+    def event_stream():
+        sent_transcripts = {}
+        translated_transcripts = {}
+        last_translations = {}
+        last_translation_time = 0.0
+        sent_audio = {}
+        last_keepalive = time.time()
 
     def event_stream():
         yield f"data: {json.dumps({'status': 'connected'})}\n\n"
 
         try:
-            for events_to_send, should_stop in _stream_caption_events(tenant_id, target_lang, last_chunk_id, wants_audio):
+            while True:
+                with transcripts_lock:
+                    tenant_transcripts = dict(transcriptd.get(tenant_id, {}))
+
+                now = time.time()
+                provider_name = registry.get_provider_name(tenant_id, "translation")
+                # Default throttle interval (can be increased for rate-limited providers)
+                throttle_interval = 0.0
+                can_translate = (now - last_translation_time) >= throttle_interval
+
+                events_to_send = []
+
+                for cid in _numeric_sorted_keys(tenant_transcripts):
+                    cid_int = _chunk_id_int(cid)
+                    if cid_int >= last_chunk_id:
+                        text = tenant_transcripts[cid]['transcript']
+                        needs_tx_update = sent_transcripts.get(cid) != text
+                        needs_tl_update = target_lang and (translated_transcripts.get(cid) != text)
+
+                        translation = last_translations.get(cid, "")
+
+                        if needs_tl_update and can_translate:
+                            can_translate = False  # Only 1 translation per loop to spread load
+                            try:
+                                lang_config = registry.get_language_config(tenant_id)
+                                source_lang = lang_config.get('source_lang', 'en')
+                                new_tl = registry.translate(tenant_id, text, source_lang, target_lang)
+                                if new_tl:
+                                    translation = new_tl
+                                last_translations[cid] = translation
+                                translated_transcripts[cid] = text
+                                last_translation_time = time.time()
+                            except Exception as e:
+                                logger.error(f"Stream translation error for {tenant_id}: {e}")
+
+                        is_ready_update = needs_tx_update or (needs_tl_update and translated_transcripts.get(cid) == text)
+                        
+                        tts_text = translation if target_lang else text
+                        needs_audio_update = False
+                        audio_b64 = None
+
+                        if wants_audio and tts_text:
+                            # Truncate extremely long texts to prevent CPU DoS during synthesis
+                            if len(tts_text) > 300:
+                                tts_text = tts_text[:297] + "..."
+                            
+                            lang_to_speak = target_lang if target_lang else registry.get_language_config(tenant_id).get('source_lang', 'en')
+                            cache_key = (lang_to_speak, tts_text)
+                            cached_audio = tts_cache.get(cache_key)
+                            
+                            if cached_audio in ('pending', 'failed'):
+                                pass
+                            elif cached_audio is not None:
+                                audio_b64 = cached_audio
+                                if sent_audio.get(cid) != tts_text:
+                                    needs_audio_update = True
+                            else:
+                                latest_tts_requests[(tenant_id, cid)] = tts_text
+                                tts_cache[cache_key] = 'pending'
+                                tts_executor.submit(_async_generate_tts, tts_text, lang_to_speak, cache_key, cid, tenant_id)
+
+                        if is_ready_update or needs_audio_update:
+                            payload = {
+                                "chunk_id": cid,
+                                "transcript": text,
+                                "translation": translation,
+                            }
+                            
+                            if needs_audio_update and audio_b64:
+                                payload["audio_b64"] = audio_b64
+                                sent_audio[cid] = tts_text
+
+                            events_to_send.append(payload)
+                            sent_transcripts[cid] = text
+
                 for payload in events_to_send:
                     yield f"data: {json.dumps(payload)}\n\n"
-                if should_stop:
-                    break
+
+                now_time = time.time()
+                if not events_to_send:
+                    if now_time - last_keepalive > 15:
+                        yield ": heartbeat\n\n"
+                        last_keepalive = now_time
+                else:
+                    last_keepalive = now_time
+
                 time.sleep(0.2)
         except GeneratorExit:
             logger.info(f"SSE Client disconnected for tenant {tenant_id}")
@@ -1543,6 +1618,12 @@ def stop_event(tenant_id):
 
     with transcripts_lock:
         transcriptd.pop(tenant_id, None)
+
+    # Instantly purge any pending chunks for this tenant from the queue
+    with audio_stack.mutex:
+        audio_stack.queue = collections.deque(
+            [item for item in audio_stack.queue if item[0] != tenant_id]
+        )
 
     try:
         from auth.models import Room, db
