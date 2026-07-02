@@ -79,8 +79,7 @@ class TestWebSocketHandshake:
             f"/ws/v1/translate/stream?tenant_id={tenant_id}&source=mic&last_chunk_id=0",
             headers={"Cookie": f"access_token_cookie={token}"},
         ):
-            with patch("time.sleep"), \
-                 patch("transcribe_server._assert_tenant_ownership"):  # ownership tested separately
+            with patch("time.sleep"):
                 handler(ws)
 
         assert len(sent) >= 1, f"No frames sent at all: {sent}"
@@ -149,8 +148,7 @@ class TestWebSocketTranscriptDelivery:
             f"/ws/v1/translate/stream?tenant_id={tenant_id}&source=mic&last_chunk_id=0",
             headers={"Cookie": f"access_token_cookie={token}"},
         ):
-            with patch("time.sleep"), \
-                 patch("transcribe_server._assert_tenant_ownership"):  # ownership tested separately
+            with patch("time.sleep"):
                 handler(ws)
 
         assert len(sent) >= 2, f"Expected ≥2 frames, got: {sent}"

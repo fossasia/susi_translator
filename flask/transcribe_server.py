@@ -111,6 +111,10 @@ if "*" in _cors_origins:
 CORS(app, resources={r"/*": {"origins": _cors_origins}}, supports_credentials=True)
 logger.info(f"CORS allowed origins: {_cors_origins}")
 
+MAX_WS_CONNECTIONS_PER_TENANT = int(os.environ.get("MAX_WS_CONNECTIONS_PER_TENANT", 50))
+ws_connections = {}
+ws_connections_lock = threading.Lock()
+
 # Database, Auth, JWT 
 app.config["SQLALCHEMY_DATABASE_URI"] = os.getenv("DATABASE_URL", "sqlite:///susi.db")
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
@@ -1175,6 +1179,71 @@ def configure_provider():
         return jsonify({"status": "error", "message": f"Configuration failed: {str(e)}"}), 500
 
 
+def _stream_caption_events(tenant_id, target_lang, last_chunk_id):
+    """
+    Shared generator for transcripts, translations, and yielding events
+    """
+    sent_transcripts = {}
+    translated_transcripts = {}
+    last_translations = {}
+    last_translation_time = 0.0
+    loop_counter = 0
+
+    while True:
+        loop_counter += 1
+        if loop_counter % 25 == 0:
+            with app.app_context():
+                from auth.models import Room, db
+                if not db.session.get(Room, tenant_id):
+                    yield [{"status": "error", "message": "Event has ended or room was deleted."}], True
+                    return
+
+        with transcripts_lock:
+            tenant_transcripts = dict(transcriptd.get(tenant_id, {}))
+
+        now = time.time()
+        provider_name = registry.get_provider_name(tenant_id, "translation")
+        # Default throttle interval
+        throttle_interval = 0.0
+        can_translate = (now - last_translation_time) >= throttle_interval
+
+        events_to_send = []
+
+        for cid in _numeric_sorted_keys(tenant_transcripts):
+            cid_int = _chunk_id_int(cid)
+            if cid_int >= last_chunk_id:
+                text = tenant_transcripts[cid]['transcript']
+
+                needs_tx_update = sent_transcripts.get(cid) != text
+                needs_tl_update = target_lang and (translated_transcripts.get(cid) != text)
+
+                if needs_tx_update or needs_tl_update:
+                    translation = last_translations.get(cid, "")
+
+                    if needs_tl_update and can_translate:
+                        try:
+                            lang_config = registry.get_language_config(tenant_id)
+                            source_lang = lang_config.get('source_lang', 'en')
+                            new_tl = registry.translate(tenant_id, text, source_lang, target_lang)
+                            if new_tl:
+                                translation = new_tl
+                            last_translations[cid] = translation
+                            translated_transcripts[cid] = text
+                            last_translation_time = time.time()
+                            can_translate = False  # Only 1 translation per loop to spread load
+                        except Exception as e:
+                            logger.error(f"Stream translation error for {tenant_id}: {e}")
+
+                    if needs_tx_update or (needs_tl_update and translated_transcripts.get(cid) == text):
+                        events_to_send.append({
+                            "chunk_id": cid,
+                            "transcript": text,
+                            "translation": translation,
+                        })
+                        sent_transcripts[cid] = text
+
+        yield events_to_send, False
+
 # SSE streaming endpoint
 
 @app.route('/api/v1/translate/stream', methods=['GET'])
@@ -1291,9 +1360,6 @@ def translate_stream():
                             events_to_send.append(payload)
                             sent_transcripts[cid] = text
 
-                for payload in events_to_send:
-                    yield f"data: {json.dumps(payload)}\n\n"
-
                 time.sleep(0.2)
         except GeneratorExit:
             logger.info(f"SSE Client disconnected for tenant {tenant_id}")
@@ -1309,6 +1375,16 @@ def _translate_stream_ws_handler(ws):
     from flask_jwt_extended.exceptions import JWTExtendedException
     from jwt.exceptions import PyJWTError
     from simple_websocket import ConnectionClosed
+
+    # Origin check for ws
+    origin = request.headers.get('Origin')
+    if origin and origin not in _cors_origins and '*' not in _cors_origins:
+        logger.warning(f"WS origin {origin} rejected. Allowed: {_cors_origins}")
+        try:
+            ws.send(json.dumps({"status": "error", "message": "Forbidden Origin"}))
+        except Exception:
+            pass
+        return
 
     # Auth
     try:
@@ -1344,107 +1420,61 @@ def _translate_stream_ws_handler(ws):
 
     try:
         _assert_tenant_ownership(tenant_id)
-    except Exception:
+    except HTTPException as e:
+        if e.code == 403:
+            try:
+                ws.send(json.dumps({"status": "error", "message": "Forbidden."}))
+            except Exception:
+                pass
+            return
+        raise # let other HTTP exceptions bubble up or be logged
+
+    # Connection Cap
+    with ws_connections_lock:
+        current_connections = ws_connections.get(tenant_id, 0)
+        if current_connections >= MAX_WS_CONNECTIONS_PER_TENANT:
+            logger.warning(f"WS connection cap reached for tenant {tenant_id}")
+            try:
+                ws.send(json.dumps({"status": "error", "message": "Too many connections."}))
+            except Exception:
+                pass
+            return
+        ws_connections[tenant_id] = current_connections + 1
+
+    try:
+        source = request.args.get('source', 'mic')
+        target_lang = request.args.get('target_lang')
+        if target_lang == 'original':
+            target_lang = None
+        elif not target_lang:
+            target_lang = registry.get_language_config(tenant_id).get('target_lang')
+        last_chunk_id = _parse_int_arg(request.args, 'last_chunk_id', default=0)
+
+        # Send connection established frame
         try:
-            ws.send(json.dumps({"status": "error", "message": "Forbidden."}))
+            ws.send(json.dumps({'status': 'connected'}))
+        except ConnectionClosed:
+            return
+
+        try:
+            for events_to_send, should_stop in _stream_caption_events(tenant_id, target_lang, last_chunk_id):
+                for payload in events_to_send:
+                    ws.send(json.dumps(payload))
+                if should_stop:
+                    break
+                _ = ws.receive(timeout=0.2)
+
+        except ConnectionClosed:
+            logger.info(f"WS client disconnected for tenant {tenant_id}")
+
         except Exception:
-            pass
-        return
+            logger.error(f"Unexpected error in WS stream for tenant {tenant_id}", exc_info=True)
 
-    source = request.args.get('source', 'mic')
-    target_lang = request.args.get('target_lang')
-    if target_lang == 'original':
-        target_lang = None
-    elif not target_lang:
-        target_lang = registry.get_language_config(tenant_id).get('target_lang')
-    last_chunk_id = _parse_int_arg(request.args, 'last_chunk_id', default=0)
-
-
-    # Send connection established frame
-    try:
-        ws.send(json.dumps({'status': 'connected'}))
-    except ConnectionClosed:
-        return
-
-    sent_transcripts = {}
-    translated_transcripts = {}
-    last_translations = {}
-    last_translation_time = 0.0
-
-    try:
-        loop_counter = 0
-        while ws.connected:
-            loop_counter += 1
-            if loop_counter % 25 == 0:
-                with app.app_context():
-                    from auth.models import Room, db
-                    if not db.session.get(Room, tenant_id):
-                        try:
-                            ws.send(json.dumps({"status": "error", "message": "Event has ended or room was deleted."}))
-                        except Exception:
-                            pass
-                        break
-
-            with transcripts_lock:
-                tenant_transcripts = dict(transcriptd.get(tenant_id, {}))
-
-            now = time.time()
-            throttle_interval = 0.0
-            can_translate = (now - last_translation_time) >= throttle_interval
-
-            events_to_send = []
-
-            for cid in _numeric_sorted_keys(tenant_transcripts):
-                cid_int = _chunk_id_int(cid)
-                if cid_int >= last_chunk_id:
-                    text = tenant_transcripts[cid]['transcript']
-
-                    needs_tx_update = sent_transcripts.get(cid) != text
-                    needs_tl_update = target_lang and (translated_transcripts.get(cid) != text)
-
-                    if needs_tx_update or needs_tl_update:
-                        translation = last_translations.get(cid, "")
-
-                        if needs_tl_update and can_translate:
-                            try:
-                                lang_config = registry.get_language_config(tenant_id)
-                                source_lang = lang_config.get('source_lang', 'en')
-                                new_tl = registry.translate(tenant_id, text, source_lang, target_lang)
-                                if new_tl:
-                                    translation = new_tl
-                                last_translations[cid] = translation
-                                translated_transcripts[cid] = text
-                                last_translation_time = time.time()
-                                can_translate = False  # Only 1 translation per loop to spread load
-                            except Exception as e:
-                                logger.error(f"WS stream translation error for {tenant_id}: {e}")
-
-                        if needs_tx_update or (needs_tl_update and translated_transcripts.get(cid) == text):
-                            events_to_send.append({
-                                "chunk_id": cid,
-                                "transcript": text,
-                                "translation": translation,
-                            })
-                            sent_transcripts[cid] = text
-
-            for payload in events_to_send:
-                ws.send(json.dumps(payload))
-
-
-
-            # Use ws.receive with timeout instead of time.sleep.
-            # This is critical because simple_websocket only processes incoming 
-            # Ping/Close frames when receive() or send() is called.
-            # If the client sends a close frame, this will raise ConnectionClosed.
-            _ = ws.receive(timeout=0.2)
-
-
-
-    except ConnectionClosed:
-        logger.info(f"WS client disconnected for tenant {tenant_id}")
-
-    except Exception:
-        logger.error(f"Unexpected error in WS stream for tenant {tenant_id}", exc_info=True)
+    finally:
+        with ws_connections_lock:
+            ws_connections[tenant_id] -= 1
+            if ws_connections[tenant_id] <= 0:
+                del ws_connections[tenant_id]
 
 
 # Register the handler on the WebSocket route
