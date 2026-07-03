@@ -120,83 +120,83 @@ class NLLBCTranslate2Provider(TranslationProvider):
             import ctranslate2
             from transformers import AutoTokenizer
 
-        # Resolve device
-        try:
-            device = self._device_config or (
-                "cuda" if ctranslate2.get_cuda_device_count() > 0 else "cpu"
-            )
-        except Exception:
-            device = self._device_config or "cpu"
-
-        if device == "cuda":
+            # Resolve device
             try:
-                if ctranslate2.get_cuda_device_count() == 0:
-                    logger.warning(
-                        f"[{self.provider_name}] CUDA requested, but no GPU found. "
-                        "Falling back to CPU."
-                    )
-                    device = "cpu"
-            except Exception:
-                device = "cpu"
-
-        self.device = device
-
-        # Resolve compute_type
-        compute_type = self._compute_type or (
-            "float16" if device == "cuda" else "int8"
-        )
-
-        logger.info(
-            f"[{self.provider_name}] Loading '{self._model_id}' "
-            f"on '{self.device}' with compute_type='{compute_type}'..."
-        )
-
-        _CUDA_LIB_HINTS = frozenset([
-            "cannot be loaded", "not found", "libcublas", "libcudnn",
-            "libcurand", "CUDA error", "cudaErrorNoDevice",
-        ])
-
-        def _load(dev: str, ctype: str) -> None:
-            ct2_model_path = _get_ct2_model_path(self._model_id)
-            self._translator = ctranslate2.Translator(
-                ct2_model_path,
-                device=dev,
-                compute_type=ctype,
-                inter_threads=self._inter_threads,
-                intra_threads=self._intra_threads,
-            )
-            # Tokenizer is pure Python/sentencepiece — device-agnostic
-            self._tokenizer = AutoTokenizer.from_pretrained(self._model_id)
-            self.device = dev
-            logger.info(
-                f"[{self.provider_name}] Model '{self._model_id}' loaded successfully "
-                f"on device='{dev}' compute_type='{ctype}'."
-            )
-
-        try:
-            _load(device, compute_type)
-        except RuntimeError as e:
-            if device == "cuda" and any(h in str(e) for h in _CUDA_LIB_HINTS):
-                logger.warning(
-                    f"[{self.provider_name}] CUDA unavailable ({e}). "
-                    "Falling back to device='cpu' compute_type='int8'."
+                device = self._device_config or (
+                    "cuda" if ctranslate2.get_cuda_device_count() > 0 else "cpu"
                 )
+            except Exception:
+                device = self._device_config or "cpu"
+
+            if device == "cuda":
                 try:
-                    _load("cpu", "int8")
-                except Exception as cpu_e:
+                    if ctranslate2.get_cuda_device_count() == 0:
+                        logger.warning(
+                            f"[{self.provider_name}] CUDA requested, but no GPU found. "
+                            "Falling back to CPU."
+                        )
+                        device = "cpu"
+                except Exception:
+                    device = "cpu"
+
+            self.device = device
+
+            # Resolve compute_type
+            compute_type = self._compute_type or (
+                "float16" if device == "cuda" else "int8"
+            )
+
+            logger.info(
+                f"[{self.provider_name}] Loading '{self._model_id}' "
+                f"on '{self.device}' with compute_type='{compute_type}'..."
+            )
+
+            _CUDA_LIB_HINTS = frozenset([
+                "cannot be loaded", "not found", "libcublas", "libcudnn",
+                "libcurand", "CUDA error", "cudaErrorNoDevice",
+            ])
+
+            def _load(dev: str, ctype: str) -> None:
+                ct2_model_path = _get_ct2_model_path(self._model_id)
+                self._translator = ctranslate2.Translator(
+                    ct2_model_path,
+                    device=dev,
+                    compute_type=ctype,
+                    inter_threads=self._inter_threads,
+                    intra_threads=self._intra_threads,
+                )
+                # Tokenizer is pure Python/sentencepiece — device-agnostic
+                self._tokenizer = AutoTokenizer.from_pretrained(self._model_id)
+                self.device = dev
+                logger.info(
+                    f"[{self.provider_name}] Model '{self._model_id}' loaded successfully "
+                    f"on device='{dev}' compute_type='{ctype}'."
+                )
+
+            try:
+                _load(device, compute_type)
+            except RuntimeError as e:
+                if device == "cuda" and any(h in str(e) for h in _CUDA_LIB_HINTS):
+                    logger.warning(
+                        f"[{self.provider_name}] CUDA unavailable ({e}). "
+                        "Falling back to device='cpu' compute_type='int8'."
+                    )
+                    try:
+                        _load("cpu", "int8")
+                    except Exception as cpu_e:
+                        raise ProviderConfigError(
+                            f"[{self.provider_name}] CPU fallback also failed: {cpu_e}"
+                        ) from cpu_e
+                else:
                     raise ProviderConfigError(
-                        f"[{self.provider_name}] CPU fallback also failed: {cpu_e}"
-                    ) from cpu_e
-            else:
+                        f"[{self.provider_name}] Failed to load NLLB CTranslate2 model: {e}"
+                    ) from e
+            except ProviderConfigError:
+                raise
+            except Exception as e:
                 raise ProviderConfigError(
                     f"[{self.provider_name}] Failed to load NLLB CTranslate2 model: {e}"
                 ) from e
-        except ProviderConfigError:
-            raise
-        except Exception as e:
-            raise ProviderConfigError(
-                f"[{self.provider_name}] Failed to load NLLB CTranslate2 model: {e}"
-            ) from e
 
     def translate(
         self,
@@ -214,7 +214,7 @@ class NLLBCTranslate2Provider(TranslationProvider):
         source_lang = _resolve_lang_code(source_lang)
         target_lang = _resolve_lang_code(target_lang)
 
-        if self._translator is None:
+        if self._translator is None or self._tokenizer is None:
             self.load_model()
 
         max_decoding_length = int(kwargs.get("max_length", 512))
@@ -224,7 +224,7 @@ class NLLBCTranslate2Provider(TranslationProvider):
                 # _translator may have been nulled by another thread's CUDA fallback
                 if self._translator is None or self._tokenizer is None:
                     raise TranslationError(
-                        f"[{self.provider_name}] Model not loaded — reload in progress."
+                        f"[{self.provider_name}] Model not loaded reload in progress."
                     )
 
                 # Set source language on the tokenizer for correct special token injection
