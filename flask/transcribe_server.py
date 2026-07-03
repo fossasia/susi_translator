@@ -2147,7 +2147,8 @@ def _eager_load_models():
     except Exception as e:
         logger.error(f"Failed to eagerly load models: {e}")
 
-_eager_load_models()
+if _env_bool('TRANSCRIBE_AUTOSTART_WORKER', True):
+    _eager_load_models()
 
 
 if __name__ == '__main__':
