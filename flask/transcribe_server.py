@@ -111,9 +111,9 @@ if "*" in _cors_origins:
 CORS(app, resources={r"/*": {"origins": _cors_origins}}, supports_credentials=True)
 logger.info(f"CORS allowed origins: {_cors_origins}")
 
-MAX_WS_CONNECTIONS_PER_TENANT = int(os.environ.get("MAX_WS_CONNECTIONS_PER_TENANT", 50))
-ws_connections = {}
-ws_connections_lock = threading.Lock()
+MAX_STREAM_CONNECTIONS_PER_TENANT = int(os.environ.get("MAX_STREAM_CONNECTIONS_PER_TENANT", os.environ.get("MAX_WS_CONNECTIONS_PER_TENANT", 50)))
+stream_connections = {}
+stream_connections_lock = threading.Lock()
 
 # Database, Auth, JWT 
 app.config["SQLALCHEMY_DATABASE_URI"] = os.getenv("DATABASE_URL", "sqlite:///susi.db")
@@ -1202,7 +1202,6 @@ def _stream_caption_events(tenant_id, target_lang, last_chunk_id):
             tenant_transcripts = dict(transcriptd.get(tenant_id, {}))
 
         now = time.time()
-        provider_name = registry.get_provider_name(tenant_id, "translation")
         # Default throttle interval
         throttle_interval = 0.0
         can_translate = (now - last_translation_time) >= throttle_interval
@@ -1257,6 +1256,13 @@ def translate_stream():
         return jsonify({"status": "error", "message": "Missing 'tenant_id'"}), 400
 
     _assert_tenant_ownership(tenant_id)
+
+    with stream_connections_lock:
+        current_connections = stream_connections.get(tenant_id, 0)
+        if current_connections >= MAX_STREAM_CONNECTIONS_PER_TENANT:
+            logger.warning(f"Stream connection cap reached for tenant {tenant_id}")
+            return jsonify({"status": "error", "message": "Too many connections."}), 429
+        stream_connections[tenant_id] = current_connections + 1
 
     target_lang = request.args.get('target_lang')
     if target_lang == 'original':
@@ -1363,6 +1369,11 @@ def translate_stream():
                 time.sleep(0.2)
         except GeneratorExit:
             logger.info(f"SSE Client disconnected for tenant {tenant_id}")
+        finally:
+            with stream_connections_lock:
+                stream_connections[tenant_id] -= 1
+                if stream_connections[tenant_id] <= 0:
+                    del stream_connections[tenant_id]
 
     return Response(event_stream(), mimetype="text/event-stream")
 
@@ -1430,16 +1441,16 @@ def _translate_stream_ws_handler(ws):
         raise # let other HTTP exceptions bubble up or be logged
 
     # Connection Cap
-    with ws_connections_lock:
-        current_connections = ws_connections.get(tenant_id, 0)
-        if current_connections >= MAX_WS_CONNECTIONS_PER_TENANT:
+    with stream_connections_lock:
+        current_connections = stream_connections.get(tenant_id, 0)
+        if current_connections >= MAX_STREAM_CONNECTIONS_PER_TENANT:
             logger.warning(f"WS connection cap reached for tenant {tenant_id}")
             try:
                 ws.send(json.dumps({"status": "error", "message": "Too many connections."}))
             except Exception:
                 pass
             return
-        ws_connections[tenant_id] = current_connections + 1
+        stream_connections[tenant_id] = current_connections + 1
 
     try:
         source = request.args.get('source', 'mic')
@@ -1471,10 +1482,10 @@ def _translate_stream_ws_handler(ws):
             logger.error(f"Unexpected error in WS stream for tenant {tenant_id}", exc_info=True)
 
     finally:
-        with ws_connections_lock:
-            ws_connections[tenant_id] -= 1
-            if ws_connections[tenant_id] <= 0:
-                del ws_connections[tenant_id]
+        with stream_connections_lock:
+            stream_connections[tenant_id] -= 1
+            if stream_connections[tenant_id] <= 0:
+                del stream_connections[tenant_id]
 
 
 # Register the handler on the WebSocket route

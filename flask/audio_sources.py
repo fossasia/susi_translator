@@ -437,32 +437,42 @@ class YouTubeSource(AudioSource):
         return url
 
 
-    def _build_ydl_argv(self) -> List[str]:
-        argv: List[str] = [
+
+
+    def start(self) -> None:
+        ydl_argv = [
             "yt-dlp",
             "--quiet",
             "--no-warnings",
-            "--no-playlist",
-            "--no-progress",
-            "--no-part",            # no partial-file writes
-            "--no-continue",        # no resume from partial state
-            "--extractor-retries", "0",  # don't retry unrecognised extractors
             "-f", self._format_selector,
-            "-o", "-",
+            "--get-url"
         ]
         if self._cookies_path:
-            argv += ["--cookies", self._cookies_path]
+            ydl_argv += ["--cookies", self._cookies_path]
         elif self._cookies_from_browser:
-            argv += ["--cookies-from-browser", self._cookies_from_browser]
-        argv += ["--", self._watch_url]
-        return argv
+            ydl_argv += ["--cookies-from-browser", self._cookies_from_browser]
+        ydl_argv += ["--", self._watch_url]
 
-    def _build_ffmpeg_argv(self) -> List[str]:
-        return [
+        try:
+            url_output = subprocess.check_output(
+                ydl_argv,
+                stderr=subprocess.DEVNULL,
+                text=True,
+                shell=False
+            )
+        except subprocess.CalledProcessError as exc:
+            raise RuntimeError(f"yt-dlp failed to get URL: {exc}")
+
+        lines = [line.strip() for line in url_output.splitlines() if line.strip()]
+        if not lines:
+            raise ValueError("yt-dlp returned no URL")
+        stream_url = lines[-1]
+
+        ff_argv = [
             "ffmpeg",
             "-loglevel", "error",
-            "-protocol_whitelist", _FFMPEG_PROTOCOL_WHITELIST_PIPE,
-            "-i", "pipe:0",
+            "-protocol_whitelist", _FFMPEG_PROTOCOL_WHITELIST,
+            "-i", stream_url,
             "-f", "s16le",
             "-acodec", "pcm_s16le",
             "-ac", str(self.CHANNELS),
@@ -470,46 +480,13 @@ class YouTubeSource(AudioSource):
             "-",
         ]
 
-
-    def start(self) -> None:
-        # SECURITY: validated URL + fixed argv + shell=False; ffmpeg's input is a local pipe, hence the pipe-only protocol whitelist.
-        ydl_argv = self._build_ydl_argv()
-        ff_argv = self._build_ffmpeg_argv()
-
-        # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit
-        # Safe: URL validated by _validate_url() (YouTube host whitelist, no
-        # leading '-'); argv built from fixed flags with '--' before the URL,
-        # shell=False.
-        self._ydl_proc = subprocess.Popen(
-            ydl_argv,
+        self._ffmpeg_proc = subprocess.Popen(
+            ff_argv,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
-            stderr=None,  # inherit: errors print to console
+            stderr=subprocess.DEVNULL,
             shell=False,
         )
-
-        try:
-            # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit
-            # Safe: fixed argv, input is the local yt-dlp pipe, pipe-only
-            # protocol whitelist, shell=False.
-            self._ffmpeg_proc = subprocess.Popen(
-                ff_argv,
-                stdin=self._ydl_proc.stdout,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
-                shell=False,
-            )
-        except Exception:
-            # Don't leave yt-dlp orphaned if ffmpeg fails to spawn.
-            self._terminate_procs()
-            raise
-
-        if self._ydl_proc.stdout is not None:
-            try:
-                self._ydl_proc.stdout.close()
-            except Exception:
-                pass
-
         self._running = True
 
     def read_chunk(self) -> Generator[bytes, None, None]:
@@ -525,7 +502,7 @@ class YouTubeSource(AudioSource):
         self._running = False
 
     def _terminate_procs(self) -> None:
-        for attr in ("_ffmpeg_proc", "_ydl_proc"):
+        for attr in ("_ffmpeg_proc",):
             proc: Optional[subprocess.Popen] = getattr(self, attr, None)
             setattr(self, attr, None)
             if proc is None:

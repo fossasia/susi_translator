@@ -81,6 +81,11 @@ For a production deployment, ensure the following are configured in your environ
 - `FLASK_DEBUG=false` (Never combine `true` with a non-loopback host — Werkzeug debugger is RCE)
 - `FLASK_HOST` (Bind to `0.0.0.0` to expose externally, but default `127.0.0.1` is recommended if running behind a reverse proxy like Nginx)
 
+### Production WS Deployment
+
+When deploying with `gunicorn`, `flask-sock` requires a WebSocket-capable worker class such as `gevent` or `eventlet` instead of a synchronous worker.
+Example: `gunicorn -k gevent -w 1 transcribe_server:app`
+
 ---
 
 ## Database Migrations
