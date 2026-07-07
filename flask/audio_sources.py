@@ -444,6 +444,7 @@ class YouTubeSource(AudioSource):
             "yt-dlp",
             "--quiet",
             "--no-warnings",
+            "--no-playlist",
             "-f", self._format_selector,
             "--get-url"
         ]
@@ -467,6 +468,10 @@ class YouTubeSource(AudioSource):
         if not lines:
             raise ValueError("yt-dlp returned no URL")
         stream_url = lines[-1]
+
+        # stream_url is validated to be a safe HTTP/HTTPS URL.
+        # ffmpeg runs with shell=False and a protocol whitelist, preventing unsafe redirects.
+        stream_url = URLSource._validate_url(stream_url)
 
         ff_argv = [
             "ffmpeg",
