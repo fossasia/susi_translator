@@ -39,6 +39,7 @@ dependencies = [
     "supertonic",
     "soundfile",
     "numba>=0.59.0",
+    "flask-talisman>=1.1.0",
 ]
 
 [tool.uv]
