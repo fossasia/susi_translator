@@ -1560,6 +1560,7 @@ def internal_token_refresh():
 
 @app.route('/api/v1/translate/status/<tenant_id>', methods=['GET'])
 @organizer_required
+@limiter.exempt
 def provider_status(tenant_id):
     """
     Check whether the models for a given tenant are fully loaded and ready.
@@ -1593,6 +1594,7 @@ class Session(Resource):
 
 
 @api.route('/transcripts')
+@limiter.exempt
 class Transcripts(Resource):
     @api.expect(transcribe_input_model)
     @api.response(202, 'Accepted', transcribe_response_model)
