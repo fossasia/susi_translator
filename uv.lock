@@ -893,6 +893,15 @@ wheels = [
 ]
 
 [[package]]
+name = "flask-talisman"
+version = "1.1.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/38/5c/157d51e32eaffdb34ee316261239937d66400a57cd8146176fd8ce50c43a/flask-talisman-1.1.0.tar.gz", hash = "sha256:c5f486f5f54420729f84b3c3850cd63f96e8b033a9629bee66c524ea363797ff", size = 22656, upload-time = "2023-08-03T12:00:28.09Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/77/1c/a15ac936dc3ae4491c5ff089dccdccd72cd3608b15fcf4e2de961f9ee8f3/flask_talisman-1.1.0-py2.py3-none-any.whl", hash = "sha256:3c42b610ebe49b0e35ca150e179bf51aa1da01e4635b49a674868ea681046208", size = 18967, upload-time = "2023-08-03T12:00:26.041Z" },
+]
+
+[[package]]
 name = "flatbuffers"
 version = "25.12.19"
 source = { registry = "https://pypi.org/simple" }
@@ -3374,6 +3383,7 @@ dependencies = [
     { name = "flask-restx" },
     { name = "flask-sock" },
     { name = "flask-sqlalchemy" },
+    { name = "flask-talisman" },
     { name = "huggingface-hub" },
     { name = "mkdocs" },
     { name = "mkdocs-bootswatch" },
@@ -3422,6 +3432,7 @@ requires-dist = [
     { name = "flask-restx" },
     { name = "flask-sock", specifier = ">=0.7.0" },
     { name = "flask-sqlalchemy", specifier = ">=3.1.1" },
+    { name = "flask-talisman", specifier = ">=1.1.0" },
     { name = "huggingface-hub", specifier = ">=1.18.0" },
     { name = "mkdocs" },
     { name = "mkdocs-bootswatch" },

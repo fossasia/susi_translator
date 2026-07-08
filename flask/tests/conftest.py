@@ -41,6 +41,9 @@ def ts():
     with ts_mod.grabber_lock:
         ts_mod.grabber_processes.clear()
 
+    from auth.extensions import limiter
+    limiter.enabled = False
+
     return ts_mod
 
 

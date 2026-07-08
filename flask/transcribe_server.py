@@ -4,6 +4,7 @@ from flask_cors import CORS
 from flask_jwt_extended import JWTManager, verify_jwt_in_request, get_jwt
 from flask_bcrypt import Bcrypt
 from flask_sock import Sock
+from flask_talisman import Talisman
 from werkzeug.exceptions import HTTPException
 import numpy as np
 import threading
@@ -94,6 +95,8 @@ def _env_csv(name: str, default: str) -> list:
     return [item.strip() for item in raw.split(",") if item.strip()]
 
 app = Flask(__name__)
+# Nginx handles SSL termination, so we don't want Flask redirecting HTTP to HTTPS
+Talisman(app, content_security_policy=None, force_https=False)
 sock = Sock(app)
 api = Api(app, version='1.0', title='Transcription API',
           description='A simple Transcription API', doc='/swagger',
@@ -165,6 +168,23 @@ limiter.init_app(app)
 
 # register auth
 app.register_blueprint(auth_bp)
+
+@app.errorhandler(Exception)
+def handle_global_exception(e):
+    logger.error(f"Unhandled Exception: {e}", exc_info=True)
+    
+    # Handle werkzeug HTTPExceptions by preserving their status code
+    if isinstance(e, HTTPException):
+        return jsonify({
+            "status": "error",
+            "message": e.description or str(e)
+        }), e.code
+        
+    return jsonify({
+        "status": "error",
+        "message": "An internal server error occurred."
+    }), 500
+
 
 # Flask-Admin
 from flask_admin.theme import Bootstrap4Theme
@@ -950,6 +970,7 @@ def allowed_file(filename):
 
 @app.route('/api/v1/translate/upload_file', methods=['POST'])
 @organizer_required
+@limiter.limit("10 per minute")
 def upload_file():
     #Check Content-Length for size limit
     if request.content_length and request.content_length > MAX_UPLOAD_SIZE:
@@ -1008,6 +1029,7 @@ def serve_audio_file(tenant_id):
 #Provider configuration endpoint
 @app.route('/api/v1/translate/configure', methods=['POST'])
 @organizer_required
+@limiter.limit("10 per minute")
 def configure_provider():
     """
     Configure transcription and/or translation providers for a tenant
