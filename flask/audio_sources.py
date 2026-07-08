@@ -20,6 +20,7 @@ detection and buffering.
 
 from __future__ import annotations
 
+import logging
 import subprocess
 import sys
 import time
@@ -27,6 +28,8 @@ import queue
 from abc import ABC, abstractmethod
 from typing import Generator, List, Optional
 from urllib.parse import urlparse
+
+logger = logging.getLogger(__name__)
 
 _ALLOWED_URL_SCHEMES: frozenset[str] = frozenset({"http", "https"})
 _FFMPEG_PROTOCOL_WHITELIST: str = "http,https,tcp,tls,crypto"
@@ -454,15 +457,24 @@ class YouTubeSource(AudioSource):
             ydl_argv += ["--cookies-from-browser", self._cookies_from_browser]
         ydl_argv += ["--", self._watch_url]
 
-        try:
-            url_output = subprocess.check_output(
-                ydl_argv,
-                stderr=subprocess.DEVNULL,
-                text=True,
-                shell=False
-            )
-        except subprocess.CalledProcessError as exc:
-            raise RuntimeError(f"yt-dlp failed to get URL: {exc}")
+        url_output = None
+        last_exc = None
+        for attempt in range(3):
+            try:
+                url_output = subprocess.check_output(
+                    ydl_argv,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    shell=False
+                )
+                break
+            except subprocess.CalledProcessError as exc:
+                last_exc = exc
+                logger.warning(f"yt-dlp attempt {attempt + 1} failed: {exc}. stderr: {exc.stderr.strip() if exc.stderr else ''}")
+                time.sleep(2)
+
+        if url_output is None:
+            raise RuntimeError(f"yt-dlp failed to get URL after 3 attempts: {last_exc}. stderr: {last_exc.stderr.strip() if last_exc and last_exc.stderr else ''}")
 
         lines = [line.strip() for line in url_output.splitlines() if line.strip()]
         if not lines:

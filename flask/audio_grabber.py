@@ -69,10 +69,14 @@ def _is_silent(pcm_bytes: bytes) -> bool: # Return True if the loudest sample in
     peak = max(abs(s) for s in samples)
     return peak < SILENCE_THRESHOLD
 
-def _build_session(auth_cookie_path: Optional[str] = None, auth_token: Optional[str] = None) -> requests.Session: # Build a requests Session with retry/backoff for transient 5xx errors.
+def _build_session(auth_cookie_path: Optional[str] = None, auth_token: Optional[str] = None) -> requests.Session:
+    # Build a requests Session with retry/backoff for transient 5xx errors and connection drops.
     retry_policy = Retry(
-        total=5,
-        backoff_factor=1,
+        total=10,  # retries
+        connect=5, # Retries for connection-related errors (e.g. Nginx restarted)
+        read=5,    # Retries for read timeouts
+        status=5,  # Retries for bad HTTP statuses
+        backoff_factor=0.5, # Faster initial backoff
         status_forcelist=[500, 502, 503, 504],
         allowed_methods=frozenset(["HEAD", "GET", "PUT", "DELETE", "OPTIONS", "TRACE", "POST"]),
     )

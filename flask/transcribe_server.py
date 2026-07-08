@@ -1443,12 +1443,24 @@ def _translate_stream_ws_handler(ws):
         except ConnectionClosed:
             return
 
+        last_ping_time = time.time()
+        
         try:
             for events_to_send, should_stop in _stream_caption_events(tenant_id, target_lang, last_chunk_id, wants_audio):
-                for payload in events_to_send:
-                    ws.send(json.dumps(payload))
+                if events_to_send:
+                    for payload in events_to_send:
+                        ws.send(json.dumps(payload))
+                    last_ping_time = time.time()
+                else:
+                    # Send a heartbeat every 15 seconds if idle
+                    if time.time() - last_ping_time > 15:
+                        ws.send(json.dumps({"status": "heartbeat"}))
+                        last_ping_time = time.time()
+
                 if should_stop:
                     break
+                
+                # Check for incoming messages
                 _ = ws.receive(timeout=0.2)
 
         except ConnectionClosed:
@@ -1594,7 +1606,6 @@ class Session(Resource):
 
 
 @api.route('/transcripts')
-@limiter.exempt
 class Transcripts(Resource):
     @api.expect(transcribe_input_model)
     @api.response(202, 'Accepted', transcribe_response_model)
