@@ -357,7 +357,11 @@ document.addEventListener('DOMContentLoaded', () => {
         currentWs.onmessage = (event) => {
             if (wsSocket !== currentWs) return;  // drop messages from superseded sockets
             try {
-                handleMessage(JSON.parse(event.data));
+                const msg = JSON.parse(event.data);
+                // Silently discard server-side keepalive pings — they are
+                // only sent to prevent proxy idle-timeout disconnects.
+                if (msg.status === 'ping') return;
+                handleMessage(msg);
             } catch (e) {
                 console.error('[stream] WS message parse error:', e);
             }

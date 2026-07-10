@@ -44,7 +44,10 @@ from audio_sources import URLSource, YouTubeSource
 # Load environment variables from .env file
 load_dotenv()
 
-logging.basicConfig(level=logging.DEBUG, format='%(asctime)s %(levelname)s: %(message)s')
+# Log level: DEBUG in dev, INFO in production (controlled via FLASK_DEBUG env var)
+# This must come before load_dotenv so that the level is set correctly.
+_log_level = logging.DEBUG if os.environ.get('FLASK_DEBUG', '').strip().lower() in ('1', 'true', 'yes', 'on') else logging.INFO
+logging.basicConfig(level=_log_level, format='%(asctime)s %(levelname)s: %(message)s')
 logger = logging.getLogger(__name__)
 
 # Known-weak placeholders that must never be used in production.
@@ -98,8 +101,11 @@ app = Flask(__name__)
 # Nginx handles SSL termination, so we don't want Flask redirecting HTTP to HTTPS
 Talisman(app, content_security_policy=None, force_https=False)
 sock = Sock(app)
+# Swagger UI is only exposed in development
+# In production it is disabled to reduce attack surface
+_swagger_doc = '/swagger' if _env_bool('FLASK_DEBUG', False) else False
 api = Api(app, version='1.0', title='Transcription API',
-          description='A simple Transcription API', doc='/swagger',
+          description='A simple Transcription API', doc=_swagger_doc,
           decorators=[organizer_required])
 
 # CORS configuration from .env file
@@ -209,6 +215,15 @@ def handle_global_exception(e):
     }), 500
 
 
+@app.route('/health')
+def health():
+    """
+    Liveness probe for Docker HEALTHCHECK, Nginx upstream checks, and
+    container orchestrators
+    """
+    return jsonify({"status": "ok"}), 200
+
+
 # Flask-Admin
 from flask_admin.theme import Bootstrap4Theme
 admin = Admin(app, name='SUSI Admin', theme=Bootstrap4Theme(swatch='flatly'), url='/admin', index_view=SecureAdminIndexView())
@@ -231,6 +246,11 @@ grabber_lock = threading.Lock()
 
 # FIFO queue of pending audio chunks awaiting transcription.
 audio_stack = queue.Queue()
+# Companion lock with shadow list for gevent-safe peeking inside the queue.
+# gevent's Queue removes the stdlib `.mutex` / `.queue` internals,
+# so we maintain our own parallel structure.
+audio_stack_lock = threading.Lock()
+_audio_stack_items: list = []  # mirrors audio_stack contents as (tenant_id, chunk_id, audiob64)
 VALID_SOURCES = {"mic", "file", "url", "stdin", "youtube", "unspecified"}
 latest_session_by_source = {s: None for s in VALID_SOURCES}
 session_lock = threading.Lock()
@@ -467,32 +487,54 @@ def _resolve_tenant(args, default='0000'):
     return default
 
 
+def _audio_stack_put(tenant_id, chunk_id, audiob64):
+    """Enqueue an item onto audio_stack and mirror it in _audio_stack_items."""
+    with audio_stack_lock:
+        _audio_stack_items.append((tenant_id, chunk_id, audiob64))
+    audio_stack.put((tenant_id, chunk_id, audiob64))
+
+
+def _audio_stack_get():
+    """Dequeue an item from audio_stack and remove the oldest matching mirror entry."""
+    item = audio_stack.get()
+    tenant_id, chunk_id, audiob64 = item
+    with audio_stack_lock:
+        for i, entry in enumerate(_audio_stack_items):
+            if entry[0] == tenant_id and entry[1] == chunk_id:
+                _audio_stack_items.pop(i)
+                break
+    return tenant_id, chunk_id, audiob64
+
+
 def _next_payload():
     """
     Pull the next audio payload from audio stack, dropping any superseded
-    duplicates so we only transcribe the latest version of each chunk
+    duplicates so we only transcribe the latest version of each chunk.
+
+    Uses a companion lock + shadow list instead of stdlib Queue internals
+    (.mutex / .queue) which are not available under gevent's monkey-patched Queue.
     """
     # 192_000 raw bytes = 96_000 int16 samples = 6 seconds at 16kHz
     # Base64 inflates by 4/3, so we set the threshold to 256_000 encoded characters.
     _MAX_SKIP_BYTES = 256_000
 
-    tenant_id, chunk_id, audiob64 = audio_stack.get()
+    tenant_id, chunk_id, audiob64 = _audio_stack_get()
     while True:
         # If the current payload is already large, just process it now.
         current_size = len(audiob64) if audiob64 else 0
         if current_size >= _MAX_SKIP_BYTES:
             return tenant_id, chunk_id, audiob64
 
-        with audio_stack.mutex:
+        with audio_stack_lock:
             has_newer = any(
                 t == tenant_id and c == chunk_id
-                for (t, c, _) in audio_stack.queue
+                for (t, c, _) in _audio_stack_items
             )
         if not has_newer:
             return tenant_id, chunk_id, audiob64
 
         audio_stack.task_done()
-        tenant_id, chunk_id, audiob64 = audio_stack.get()
+        tenant_id, chunk_id, audiob64 = _audio_stack_get()
 
 
 
@@ -814,7 +856,7 @@ def _transcribe_logic(success_status: int = 202):
             return {"error": "Forbidden or invalid tenant scope.", "status": "error"}, 403
 
     # push to processing queue
-    audio_stack.put((tenant_id, chunk_id, audio_b64))
+    _audio_stack_put(tenant_id, chunk_id, audio_b64)
     return {"chunk_id": chunk_id, "tenant_id": tenant_id, "status": "processing"}, success_status
 
 
@@ -986,7 +1028,7 @@ def _transcripts_size_logic():
     t = {k: v for k, v in t.items() if _in_chunk_range(k, fromid, untilid)}
     return {'size': len(t)}
 
-UPLOAD_FOLDER = os.path.abspath(os.path.join('instance', 'uploads'))
+UPLOAD_FOLDER = os.path.abspath(os.path.join(os.path.dirname(__file__), 'instance', 'uploads'))
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 ALLOWED_EXTENSIONS ={'mp3', 'wav', 'm4a', 'ogg', 'flac', 'mp4', 'aac'}
@@ -1470,12 +1512,22 @@ def _translate_stream_ws_handler(ws):
         except ConnectionClosed:
             return
 
+        last_ping_time = time.time()
+
         try:
             for events_to_send, should_stop in _stream_caption_events(tenant_id, target_lang, last_chunk_id, wants_audio):
                 for payload in events_to_send:
                     ws.send(json.dumps(payload))
                 if should_stop:
                     break
+
+                # Send a keepalive ping every 20s so proxies
+                # don't kill the idle connection on their idle-timeout.
+                now = time.time()
+                if now - last_ping_time >= 20:
+                    ws.send(json.dumps({'status': 'ping'}))
+                    last_ping_time = now
+
                 _ = ws.receive(timeout=0.2)
 
         except ConnectionClosed:
@@ -1962,10 +2014,21 @@ def stream_page(tenant_id: str):
 
 
 if __name__ == '__main__':
-    # Server bind config is env-driven so the defaults are SAFE:
+    #PRODUCTION: Do NOT use this block
+    #gunicorn -k gevent -w 1 --worker-connections 1000 \
+    #         -b 0.0.0.0:5040 transcribe_server:app
     host = os.getenv('FLASK_HOST', '127.0.0.1')
     port = int(os.getenv('FLASK_PORT', '5040'))
     debug = _env_bool('FLASK_DEBUG', False)
+
+    if not debug:
+        logger.warning(
+            "Starting with Werkzeug dev server. "
+            "For production use gunicorn: "
+            "gunicorn -k gevent -w 1 --worker-connections 1000 "
+            "-b %s:%s transcribe_server:app",
+            host, port,
+        )
 
     if debug and host not in ('127.0.0.1', 'localhost'):
         logger.warning(
@@ -1977,10 +2040,5 @@ if __name__ == '__main__':
 
     # use_reloader=False because the audio-worker thread above must not be spawned twice
     # NOTE: Do NOT use ssl_context='adhoc' in production.
-    # In production, run Flask behind a reverse proxy (Nginx or Caddy) that handles
-    # HTTPS with a real certificate (e.g. Let's Encrypt). Flask serves plain HTTP
-    # on localhost, and the proxy terminates TLS externally.
-    # For local development with mic access (requires HTTPS), you can temporarily
-    # set ssl_context='adhoc' after installing pyopenssl, but never commit that to prod.
     ssl_ctx = os.getenv('FLASK_SSL_CONTEXT', None)  # set to 'adhoc' only for local dev
     app.run(host=host, port=port, debug=debug, use_reloader=False, ssl_context=ssl_ctx or None)

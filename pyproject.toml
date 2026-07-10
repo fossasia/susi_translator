@@ -40,6 +40,8 @@ dependencies = [
     "soundfile",
     "numba>=0.59.0",
     "flask-talisman>=1.1.0",
+    "gunicorn>=22.0.0",
+    "gevent>=24.0.0",
 ]
 
 [tool.uv]

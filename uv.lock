@@ -1140,6 +1140,18 @@ wheels = [
 ]
 
 [[package]]
+name = "gunicorn"
+version = "26.0.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "packaging" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/6d/b7/a4a3f632f823e432ce6bc65f62961b7980c898c77f075a2f7118cb3846fe/gunicorn-26.0.0.tar.gz", hash = "sha256:ca9346f85e3a4aeeb64d491045c16b9a35647abd37ea15efe53080eb8b090baf", size = 727286, upload-time = "2026-05-05T06:38:25.529Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e6/40/9c2384fc2be4ad25dd4a49decd5ad9ea5a3639814c11bd40ab77cb9f0a14/gunicorn-26.0.0-py3-none-any.whl", hash = "sha256:40233d26a5f0d1872916188c276e21641155111c2853f0c2cd55260aec0d24fc", size = 212009, upload-time = "2026-05-05T06:38:23.007Z" },
+]
+
+[[package]]
 name = "h11"
 version = "0.16.0"
 source = { registry = "https://pypi.org/simple" }
@@ -3375,6 +3387,8 @@ dependencies = [
     { name = "flask-sock" },
     { name = "flask-sqlalchemy" },
     { name = "flask-talisman" },
+    { name = "gevent" },
+    { name = "gunicorn" },
     { name = "huggingface-hub" },
     { name = "mkdocs" },
     { name = "mkdocs-bootswatch" },
@@ -3424,6 +3438,8 @@ requires-dist = [
     { name = "flask-sock", specifier = ">=0.7.0" },
     { name = "flask-sqlalchemy", specifier = ">=3.1.1" },
     { name = "flask-talisman", specifier = ">=1.1.0" },
+    { name = "gevent", specifier = ">=24.0.0" },
+    { name = "gunicorn", specifier = ">=22.0.0" },
     { name = "huggingface-hub", specifier = ">=1.18.0" },
     { name = "mkdocs" },
     { name = "mkdocs-bootswatch" },
