@@ -1594,7 +1594,6 @@ class Session(Resource):
 
 
 @api.route('/transcripts')
-@limiter.exempt
 class Transcripts(Resource):
     @api.expect(transcribe_input_model)
     @api.response(202, 'Accepted', transcribe_response_model)
