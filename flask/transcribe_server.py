@@ -278,7 +278,25 @@ TTS_VOICE_STYLES = {
     "it": "M1",
 }
 
-def generate_tts_sync(text, target_lang):
+TTS_VOICES = [
+    {"id": "auto", "label": "Automatic"},
+    *[
+        {"id": voice_id, "label": f"Voice {voice_id}"}
+        for voice_id in ("F1", "F2", "F3", "F4", "F5", "M1", "M2", "M3", "M4", "M5")
+    ],
+]
+TTS_VOICE_IDS = frozenset(voice["id"] for voice in TTS_VOICES if voice["id"] != "auto")
+
+
+def resolve_tts_voice(target_lang, requested_voice=None):
+    if not requested_voice or requested_voice == "auto":
+        return TTS_VOICE_STYLES.get(target_lang, "F1")
+    if requested_voice not in TTS_VOICE_IDS:
+        raise ValueError(f"Unknown TTS voice {requested_voice!r}.")
+    return requested_voice
+
+
+def generate_tts_sync(text, target_lang, voice_name=None):
     if not text.strip():
         return None
     try:
@@ -286,8 +304,7 @@ def generate_tts_sync(text, target_lang):
         lang_tag = target_lang if target_lang in SUPERTONIC_SUPPORTED_LANGS else "na"
         
         tts_engine = get_tts_engine()
-        # Get voice style, fallback to F1 if not mapped
-        style_name = TTS_VOICE_STYLES.get(target_lang, "F1")
+        style_name = resolve_tts_voice(target_lang, voice_name)
         voice_style = tts_engine.get_voice_style(voice_name=style_name)
         
         with tts_inference_lock:
@@ -310,15 +327,16 @@ def generate_tts_sync(text, target_lang):
         logger.error(f"TTS Error: {e}", exc_info=True)
         return None
 
-def _async_generate_tts(text, target_lang, cache_key, chunk_id=None, tenant_id=None):
+
+def _async_generate_tts(text, target_lang, voice_name, cache_key, chunk_id=None, tenant_id=None):
     if chunk_id is not None and tenant_id is not None:
-        if latest_tts_requests.get((tenant_id, chunk_id)) != text:
+        if latest_tts_requests.get((tenant_id, chunk_id, voice_name)) != text:
             # A newer request for this chunk is queued. Skip this obsolete one!
             tts_cache.pop(cache_key, None)
             return
 
     try:
-        audio_b64 = generate_tts_sync(text, target_lang)
+        audio_b64 = generate_tts_sync(text, target_lang, voice_name)
         if audio_b64 is None:
             tts_cache[cache_key] = 'failed'
         else:
@@ -1185,7 +1203,9 @@ def configure_provider():
         return jsonify({"status": "error", "message": f"Configuration failed: {str(e)}"}), 500
 
 
-def _stream_caption_events(tenant_id, target_lang, last_chunk_id, wants_audio=False):
+def _stream_caption_events(
+    tenant_id, target_lang, last_chunk_id, wants_audio=False, voice_name=None
+):
     """
     Shared generator for transcripts, translations, and yielding events
     """
@@ -1251,19 +1271,27 @@ def _stream_caption_events(tenant_id, target_lang, last_chunk_id, wants_audio=Fa
                         tts_text = tts_text[:297] + "..."
                     
                     lang_to_speak = target_lang if target_lang else registry.get_language_config(tenant_id).get('source_lang', 'en')
-                    cache_key = (lang_to_speak, tts_text)
+                    cache_key = (lang_to_speak, voice_name, tts_text)
                     cached_audio = tts_cache.get(cache_key)
                     
                     if cached_audio in ('pending', 'failed'):
                         pass
                     elif cached_audio is not None:
                         audio_b64 = cached_audio
-                        if sent_audio.get(cid) != tts_text:
+                        if sent_audio.get(cid) != (tts_text, voice_name):
                             needs_audio_update = True
                     else:
-                        latest_tts_requests[(tenant_id, cid)] = tts_text
+                        latest_tts_requests[(tenant_id, cid, voice_name)] = tts_text
                         tts_cache[cache_key] = 'pending'
-                        tts_executor.submit(_async_generate_tts, tts_text, lang_to_speak, cache_key, cid, tenant_id)
+                        tts_executor.submit(
+                            _async_generate_tts,
+                            tts_text,
+                            lang_to_speak,
+                            voice_name,
+                            cache_key,
+                            cid,
+                            tenant_id,
+                        )
 
                 if is_ready_update or needs_audio_update:
                     payload = {
@@ -1274,7 +1302,7 @@ def _stream_caption_events(tenant_id, target_lang, last_chunk_id, wants_audio=Fa
                     
                     if needs_audio_update and audio_b64:
                         payload["audio_b64"] = audio_b64
-                        sent_audio[cid] = tts_text
+                        sent_audio[cid] = (tts_text, voice_name)
 
                     events_to_send.append(payload)
                     sent_transcripts[cid] = text
@@ -1302,6 +1330,11 @@ def translate_stream():
         target_lang = registry.get_language_config(tenant_id).get('target_lang')
     last_chunk_id = _parse_int_arg(request.args, 'last_chunk_id', default=0)
     wants_audio = request.args.get('audio', 'false').lower() == 'true'
+    requested_voice = request.args.get('voice', 'auto')
+    try:
+        voice_name = resolve_tts_voice(target_lang, requested_voice)
+    except ValueError as exc:
+        return jsonify({"status": "error", "message": str(exc)}), 400
 
     with stream_connections_lock:
         current_connections = stream_connections.get(tenant_id, 0)
@@ -1311,10 +1344,16 @@ def translate_stream():
         stream_connections[tenant_id] = current_connections + 1
 
     def event_stream():
-        yield f"data: {json.dumps({'status': 'connected'})}\n\n"
+        yield f"data: {json.dumps({'status': 'connected', 'tts_voices': TTS_VOICES, 'tts_default_voice': 'auto'})}\n\n"
 
         try:
-            for events_to_send, should_stop in _stream_caption_events(tenant_id, target_lang, last_chunk_id, wants_audio):
+            for events_to_send, should_stop in _stream_caption_events(
+                tenant_id,
+                target_lang,
+                last_chunk_id,
+                wants_audio,
+                voice_name,
+            ):
                 for payload in events_to_send:
                     yield f"data: {json.dumps(payload)}\n\n"
                 if should_stop:
