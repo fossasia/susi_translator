@@ -73,15 +73,53 @@ class TestWebSocketHandshake:
         ws, sent = _make_ws(max_connected=1)
 
         with ts.app.test_request_context(
-            f"/ws/v1/translate/stream?tenant_id={tenant_id}&source=mic&last_chunk_id=0",
+            f"/ws/v1/translate/stream?tenant_id={tenant_id}"
+            "&source=mic&target_lang=en&last_chunk_id=0&audio=true&voice=M4",
             headers={"Cookie": f"access_token_cookie={token}"},
         ):
-            with patch("time.sleep"):
+            with patch(
+                "transcribe_server._stream_caption_events",
+                return_value=iter([([], True)]),
+            ) as stream_events:
                 handler(ws)
 
         assert len(sent) >= 1, f"No frames sent at all: {sent}"
         first = json.loads(sent[0])
         assert first["status"] == "connected", f"Got {first} instead of connected frame"
+        assert first["tts_default_voice"] == "auto"
+        assert [voice["id"] for voice in first["tts_voices"]] == [
+            "auto", "F1", "F2", "F3", "F4", "F5", "M1", "M2", "M3", "M4", "M5",
+        ]
+        stream_events.assert_called_once_with(tenant_id, "en", 0, True, "M4")
+
+    def test_unknown_voice_sends_error(self, ts):
+        from transcribe_server import _translate_stream_ws_handler as handler
+
+        tenant_id = "ws-unknown-voice"
+        with ts.app.app_context():
+            from auth.models import Organizer
+            user = Organizer(
+                email="wsvoice@localhost.com", password_hash="dummy", is_admin=True
+            )
+            ts.db.session.add(user)
+            ts.db.session.commit()
+            token = create_access_token(identity=user.email)
+
+        ws, sent = _make_ws(max_connected=0)
+        with ts.app.test_request_context(
+            f"/ws/v1/translate/stream?tenant_id={tenant_id}"
+            "&target_lang=en&audio=true&voice=robot",
+            headers={"Cookie": f"access_token_cookie={token}"},
+        ):
+            with patch("transcribe_server._stream_caption_events") as stream_events:
+                handler(ws)
+
+        assert len(sent) == 1
+        assert json.loads(sent[0]) == {
+            "status": "error",
+            "message": "Unknown TTS voice 'robot'.",
+        }
+        stream_events.assert_not_called()
 
 
 

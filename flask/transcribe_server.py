@@ -1453,15 +1453,34 @@ def _translate_stream_ws_handler(ws):
             target_lang = registry.get_language_config(tenant_id).get('target_lang')
         last_chunk_id = _parse_int_arg(request.args, 'last_chunk_id', default=0)
         wants_audio = request.args.get('audio', 'false').lower() == 'true'
+        requested_voice = request.args.get('voice', 'auto')
+        try:
+            voice_name = resolve_tts_voice(target_lang, requested_voice)
+        except ValueError as exc:
+            try:
+                ws.send(json.dumps({"status": "error", "message": str(exc)}))
+            except Exception:
+                pass
+            return
 
         # Send connection established frame
         try:
-            ws.send(json.dumps({'status': 'connected'}))
+            ws.send(json.dumps({
+                'status': 'connected',
+                'tts_voices': TTS_VOICES,
+                'tts_default_voice': 'auto',
+            }))
         except ConnectionClosed:
             return
 
         try:
-            for events_to_send, should_stop in _stream_caption_events(tenant_id, target_lang, last_chunk_id, wants_audio):
+            for events_to_send, should_stop in _stream_caption_events(
+                tenant_id,
+                target_lang,
+                last_chunk_id,
+                wants_audio,
+                voice_name,
+            ):
                 for payload in events_to_send:
                     ws.send(json.dumps(payload))
                 if should_stop:
