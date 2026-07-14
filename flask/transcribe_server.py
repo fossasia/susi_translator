@@ -169,6 +169,28 @@ limiter.init_app(app)
 # register auth
 app.register_blueprint(auth_bp)
 
+@app.errorhandler(429)
+def handle_ratelimit(e):
+    """Return a friendly JSON message when a client exceeds a rate limit"""
+
+    limit_info = getattr(e, "description", "the request limit")
+    retry_after = None
+    try:
+        retry_after = e.retry_after
+    except AttributeError:
+        pass
+    response_body = {
+        "status": "rate_limited",
+        "message": (
+            f"Whoa, slow down! \U0001f6a6 You've reached {limit_info}. "
+            "Please wait a moment and try again."
+        ),
+    }
+    if retry_after is not None:
+        response_body["retry_after_seconds"] = int(retry_after)
+    return jsonify(response_body), 429
+
+
 @app.errorhandler(Exception)
 def handle_global_exception(e):
     logger.error(f"Unhandled Exception: {e}", exc_info=True)
@@ -201,6 +223,8 @@ transcripts_lock = threading.Lock()
 
 # Background audio grabber subprocesses, keyed by tenant_id.
 grabber_processes = {}
+_grabber_failure_logged: set = set()  # tenant_ids whose crash has already been logged
+
  
 grabber_lock = threading.Lock()
 
@@ -801,6 +825,8 @@ def _kill_grabber(proc, tenant_id: str) -> None:
         logger.info(f"Stopped grabber for tenant {tenant_id}")
     except Exception as e:
         logger.error(f"Error stopping grabber for {tenant_id}: {e}")
+    finally:
+        _grabber_failure_logged.discard(tenant_id)
 
 
 def cleanup_grabbers():
@@ -1474,6 +1500,7 @@ sock.route('/ws/v1/translate/stream')(_translate_stream_ws_handler)
 
 @app.route('/api/v1/translate/rooms', methods=['GET'])
 @organizer_required
+@limiter.limit("30 per minute")
 def get_rooms():
     from flask_jwt_extended import get_jwt_identity
     from auth.models import Organizer, Room
@@ -1499,6 +1526,7 @@ def get_rooms():
 
 @app.route('/stop_event/<tenant_id>', methods=['POST'])
 @organizer_required
+@limiter.limit("10 per minute")
 def stop_event(tenant_id):
     """
     Kills the background audio grabber, releases provider slots, and
@@ -1570,6 +1598,35 @@ def provider_status(tenant_id):
 
     if registry.is_pipeline_ready(tenant_id):
         return jsonify({"status": "ready"}), 200
+
+    # Check if the grabber subprocess already crashed before models were ready.
+    with grabber_lock:
+        proc = grabber_processes.get(tenant_id)
+    if proc is not None:
+        exit_code = proc.poll()
+        if exit_code is not None and exit_code != 0:
+            if tenant_id not in _grabber_failure_logged:
+                _grabber_failure_logged.add(tenant_id)
+                logger.error(
+                    f"[status] Grabber for tenant {tenant_id} exited with code {exit_code}. "
+                    "Likely cause: yt-dlp could not fetch the stream URL (stream offline, "
+                    "unsupported platform, or region-blocked)."
+                )
+            else:
+                logger.debug(
+                    f"[status] Grabber for tenant {tenant_id} still exited (code {exit_code}), "
+                    "already reported."
+                )
+            return jsonify({
+                "status": "failed",
+                "message": (
+                    "The audio grabber crashed before it could start. "
+                    "The stream may be offline, the URL may be unsupported, "
+                    "or the platform may require authentication. "
+                    "Please check your stream URL and try again."
+                ),
+            }), 200
+
     return jsonify({"status": "warming_up"}), 200
 
 

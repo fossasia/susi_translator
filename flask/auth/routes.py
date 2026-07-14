@@ -98,6 +98,7 @@ def login():
 
 @auth_bp.route("/api/logout", methods=["POST"])
 @jwt_required()
+@limiter.limit("10 per minute")
 def logout():
     jti = get_jwt()["jti"]
     from .models import TokenBlocklist
@@ -116,6 +117,7 @@ def logout():
 
 @auth_bp.route("/api/me", methods=["GET"])
 @jwt_required()
+@limiter.limit("30 per minute")
 def me():
     """Return the current authenticated organizer's profile."""
     email = get_jwt_identity()
@@ -134,6 +136,7 @@ def me():
 
 @auth_bp.route("/api/status", methods=["GET"])
 @jwt_required(optional=True)
+@limiter.limit("30 per minute")
 def status():
     
     email = get_jwt_identity()
