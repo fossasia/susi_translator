@@ -488,10 +488,10 @@ def _resolve_tenant(args, default='0000'):
 
 
 def _audio_stack_put(tenant_id, chunk_id, audiob64):
-    """Enqueue an item onto audio_stack and mirror it in _audio_stack_items."""
+    """Enqueue an item onto audio_stack and mirror it in _audio_stack_items"""
     with audio_stack_lock:
         _audio_stack_items.append((tenant_id, chunk_id, audiob64))
-    audio_stack.put((tenant_id, chunk_id, audiob64))
+        audio_stack.put((tenant_id, chunk_id, audiob64))
 
 
 def _audio_stack_get():
