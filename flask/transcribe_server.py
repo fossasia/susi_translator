@@ -1596,10 +1596,6 @@ def provider_status(tenant_id):
     """
     _assert_tenant_ownership(tenant_id)
 
-    if registry.is_pipeline_ready(tenant_id):
-        return jsonify({"status": "ready"}), 200
-
-    # Check if the grabber subprocess already crashed before models were ready.
     with grabber_lock:
         proc = grabber_processes.get(tenant_id)
     if proc is not None:
@@ -1626,6 +1622,9 @@ def provider_status(tenant_id):
                     "Please check your stream URL and try again."
                 ),
             }), 200
+
+    if registry.is_pipeline_ready(tenant_id):
+        return jsonify({"status": "ready"}), 200
 
     return jsonify({"status": "warming_up"}), 200
 
