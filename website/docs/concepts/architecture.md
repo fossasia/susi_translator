@@ -8,7 +8,7 @@ This document explores the internal design decisions, concurrency models, and st
 
 As an open-source project, we believe in radical transparency regarding _why_ we built things a certain way, allowing both new and senior contributors to understand the system deeply.
 
-## 1. The Core Stack: Flask with simple-websocket
+## 1. The Core Stack: Flask with Gunicorn & Gevent
 
 While many modern Python async frameworks exist (like FastAPI or Sanic), SUSI Translator is built on **Flask**.
 
@@ -16,18 +16,24 @@ While many modern Python async frameworks exist (like FastAPI or Sanic), SUSI Tr
 
 Flask provides an incredibly mature ecosystem for authentication (`flask-jwt-extended`), database ORM (`SQLAlchemy`), and routing. However, Flask is historically synchronous.
 
-### Why `simple-websocket`?
+### Concurrency with Gevent
 
-To achieve real-time bi-directional streaming in a synchronous Flask environment, we opted for `simple-websocket` rather than massive async wrappers or `Flask-SocketIO`.
+To achieve massive concurrency for real-time audio streaming and Server-Sent Events (SSE), we deploy the application using **Gunicorn with Gevent workers**.
 
-- **Lower Overhead**: `simple-websocket` runs directly on the Werkzeug development server or production WSGI servers that support WebSocket upgrades.
-- **Raw Control**: It gives us raw access to WebSocket frames (text and binary), which is crucial for handling raw audio chunks without the overhead of SocketIO's custom polling protocols.
+- **Greenlets over Threads**: Instead of using OS-level threads which are heavy and block on I/O, Gevent uses lightweight "greenlets". A single Gunicorn worker can handle thousands of concurrent WebSocket and SSE connections asynchronously.
+- **Monkey Patching**: Gevent monkey-patches standard library threading and I/O structures. This allows us to use traditional tools like `queue.Queue` (`audio_stack`) safely without introducing deadlocks.
 
-## 2. Concurrency & Threading
+## 2. The Audio Pipeline & Threading
 
-Handling live audio streams requires strict thread safety, especially when multiple WebSocket clients connect to the same translation room.
+Handling live audio streams requires strict thread safety, especially when multiple clients connect to the same translation room.
 
-### The `transcripts_lock` Pattern
+### The `audio_stack` Queue
+
+Incoming audio chunks are immediately decoded and pushed to `audio_stack` (a FIFO queue). A background daemon thread (`process_audio()`) continuously consumes this queue.
+
+- **Optimization**: To save CPU cycles, the `_next_payload()` function checks the queue size. If a client uploads multiple versions of the exact same audio chunk (e.g., from network lag), it smartly drops superseded duplicates and only processes the latest chunk.
+
+### In-Memory Locking
 
 Instead of persisting real-time transient captions to a database (which would introduce I/O bottleneck latency), transient state is kept in-memory:
 
@@ -38,20 +44,23 @@ Instead of persisting real-time transient captions to a database (which would in
 Because state is in-memory, the current architecture expects a single-node deployment for the streaming engine, or sticky sessions if deployed behind a load balancer. Future contributors can look into Redis Pub/Sub for multi-node scaling.
 :::
 
-## 3. Tenant & Room Isolation
+## 3. Subprocess Management (Audio Grabbers)
 
-Every action in the system is scoped to a `tenant_id`.
+For URL and YouTube streams, the server launches background `audio_grabber.py` instances using `subprocess.Popen`.
 
-- **Rooms**: A room is essentially a session owned by an `Organizer`.
-- **JWT Authentication**: All sensitive routes use `@organizer_required` and `verify_jwt_in_request`.
+- The PIDs are tracked in a shared `grabber_processes` dictionary.
+- When a stream is stopped or the server shuts down, strict `SIGTERM` and `SIGKILL` (via `atexit`) signals are sent to prevent zombie `ffmpeg` processes from leaking memory.
 
-### Why Tenant IDs instead of User IDs?
+## 4. TTS Optimization (Supertonic)
 
-A "Tenant" (or Room) represents the _event_ rather than the _speaker_. Multiple listeners can subscribe to the same `tenant_id` stream. This fan-out architecture ensures we only transcribe the audio once, and broadcast the result to N listeners, saving massive compute costs.
+Text-To-Speech inference is computationally expensive. SUSI Translator includes a highly optimized engine:
 
-## 4. The Provider Registry
+- **`SizeBoundedTTSCache`**: An LRU-style dictionary that strictly caps memory usage at 50MB. Old audio payloads are evicted to prevent OOM crashes.
+- **Inference Locking**: A dedicated `tts_inference_lock` and a ThreadPoolExecutor (`max_workers=1`) ensure that parallel threads don't attempt simultaneous TTS generation, protecting the CPU/GPU from contention.
+
+## 5. The Provider Registry
 
 Translation and transcription APIs change rapidly. We use a **Provider Registry Pattern**.
 
-- **Abstraction**: The core WebSocket loop doesn't know if Whisper, Google API, or DeepL is doing the translation. It simply calls `registry.translate()`.
-- **Why?**: This allows the frontend to send a `/configure` request to swap the engine dynamically on the fly without restarting the WebSocket connection.
+- **Abstraction**: The core WebSocket loop doesn't know if Whisper, Google API, or DeepL is doing the translation. It simply calls `registry.transcribe()`.
+- **Why?**: This allows the frontend to send a `/configure` request to swap the engine dynamically on the fly without restarting the connection.

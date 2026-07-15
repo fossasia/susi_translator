@@ -2,81 +2,70 @@
 sidebar_position: 3
 ---
 
-# Translation Stream (WebSockets)
+# Translation Stream
 
-**Endpoint**: `WS /ws/v1/translate/stream`
+The SUSI Translator supports two streaming protocols for receiving real-time transcripts and translations. Both routes are tightly integrated with the core Gevent architecture.
 
-This is the most complex and critical endpoint in the SUSI Translator architecture. It handles real-time bidirectional communication.
+## 1. Server-Sent Events (SSE)
 
-:::note Server-Sent Events (SSE)
-We also expose a fallback `GET /api/v1/translate/stream` endpoint using Server-Sent Events. However, the WebSocket implementation is vastly superior for production as it allows the client to stream raw microphone audio _up_ to the server on the same socket that receives translations _down_.
-:::
+**Endpoint**: `GET /api/v1/translate/stream`
 
----
+This is the standard, unidirectional Server-Sent Events endpoint.
 
-## Connection & Request
+- **Nginx Tuning**: This route completely bypasses Nginx buffering via `proxy_buffering off;`.
+- **Use Case**: Best used when the client only needs to _listen_ to a stream (e.g., an audience member on a mobile device where WebSockets might be blocked by aggressive cellular firewalls).
 
-- **Protocol**: `ws://` or `wss://`
-- **Authentication**: JWT tokens passed via cookies or headers.
-
-### Query Parameters
+### Connection Parameters (Query)
 
 | Parameter       | Required | Description                                                                    |
 | --------------- | -------- | ------------------------------------------------------------------------------ |
-| `tenant_id`     | Yes      | The room to join.                                                              |
-| `source`        | No       | Default is `mic`.                                                              |
+| `tenant_id`     | Yes      | The room UUID to join.                                                         |
 | `target_lang`   | No       | Target translation language (e.g., `es`). If `original`, it skips translation. |
 | `last_chunk_id` | No       | Integer for resumption. Defaults to 0.                                         |
+| `wants_audio`   | No       | If true, the server will trigger TTS generation and send `audio_b64` payloads. |
 
 ---
 
-## The Handler Loop (`_translate_stream_ws_handler`)
+## 2. WebSockets (Bidirectional)
 
-Understanding the `while ws.connected:` loop is crucial for contributors.
+**Endpoint**: `WS /ws/v1/translate/stream`
 
-### 1. The Throttling Mechanism
+This endpoint is managed by `flask_sock` and is vastly superior for the **Organizer** as it allows the client to stream raw microphone audio _up_ to the server on the same socket that receives translations _down_.
 
-```python
-can_translate = (now - last_translation_time) >= throttle_interval
-```
+### The Handler Loop (`_translate_stream_ws_handler`)
 
-- **Why?**: Translation APIs (like Google or DeepL) charge per character and enforce strict rate limits. If we sent every single audio frame's partial transcription to the translator, we would get rate-limited instantly.
-- **How**: We implement a time-based throttle (`throttle_interval`) and only allow _one_ translation per loop iteration (`can_translate = False`).
+Understanding the internal Gevent loop is crucial for contributors:
 
-### 2. The `last_chunk_id` Cursor
-
-The system maintains a sorted numerical cursor (`cid_int`).
-
-- **Why?**: If a WebSocket drops on a poor mobile connection, the client can reconnect and pass `last_chunk_id=42`. The server skips iterating over the first 41 chunks, immediately catching the client up. This ensures idempotent, gapless delivery.
-
-### 3. Idle Timeouts and Ping Frames
-
-```python
-_ = ws.receive(timeout=0.2)
-```
-
-- **Why?**: In synchronous Python WebSockets, control must be yielded to the underlying socket library to process incoming TCP Ping/Pong and Close frames. If we used `time.sleep()`, the socket would silently buffer and eventually crash. By using `ws.receive(timeout)`, we simultaneously sleep the loop and process network events safely.
+1. **The Throttling Mechanism**: We implement a time-based throttle (`throttle_interval`) so we don't spam translation APIs (like Google/DeepL) with every 100ms partial audio frame.
+2. **The `last_chunk_id` Cursor**: The system maintains a sorted numerical cursor. If a connection drops, the client passes `last_chunk_id=42` on reconnect. The server skips iterating over the first 41 chunks, immediately catching the client up without redelivering duplicate text.
+3. **Idle Timeouts (`ws.receive(timeout=0.2)`)**: In our architecture, we cannot use `time.sleep()` inside the loop, because it would block the socket from processing incoming TCP Ping/Pong and Close frames. Using `ws.receive(timeout=0.2)` safely yields execution back to Gevent while allowing us to instantly detect `ConnectionClosed` events.
+4. **Connection Caps**: To prevent FD (File Descriptor) exhaustion attacks, connections are tracked via `stream_connections` lock and capped by `MAX_STREAM_CONNECTIONS_PER_TENANT`.
 
 ---
 
 ## Payload Formats
 
-### Initial Connection
+Both SSE and WebSockets emit identical JSON payload structures. (WebSockets use `json.dumps(payload)` directly).
+
+### Transcript & Translation Payload
 
 ```json
 {
-  "status": "connected"
+  "chunk_id": "42",
+  "transcript": "Hello world.",
+  "translation": "Hola mundo."
 }
 ```
 
-### Translation Events
+### TTS Payload (If `wants_audio=true`)
 
-Broadcast continuously as audio is processed:
+When a translated sentence boundary is reached, the async TTS worker (`SizeBoundedTTSCache`) intercepts it and attaches audio:
 
 ```json
 {
-  "chunk_id": "1",
-  "transcript": "Hello world",
-  "translation": "Hola mundo"
+  "chunk_id": "42",
+  "transcript": "Hello world.",
+  "translation": "Hola mundo.",
+  "audio_b64": "UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AA..."
 }
 ```

@@ -2,15 +2,20 @@
 sidebar_position: 6
 ---
 
-# Authentication
+# Authentication & Security
 
-The Authentication API manages the Organizer lifecycle and issues JWT tokens via secure HTTP-Only cookies.
+The Authentication API manages the Organizer lifecycle, secures all streaming/tenant endpoints, and issues JWT tokens via secure HTTP-Only cookies.
 
-## Why JWT in Cookies?
+## Security Baseline
 
-Using HTTP-Only cookies for JWT prevents Cross-Site Scripting (XSS) attacks from accessing the tokens, providing a much higher security baseline compared to storing tokens in `localStorage`.
+We enforce strict security rules at the infrastructure level.
 
-All endpoints except `signup`, `login`, and `status` require the JWT token to be present.
+1. **`JWT_SECRET_KEY` Validation**: The `_require_secret_key()` function runs on boot. If the secret key is missing, under 32 characters, or matches a known weak placeholder (e.g., `"change-me"`), the server intentionally crashes (`RuntimeError`). This prevents operators from deploying insecure instances.
+2. **Cookie Security**:
+   - `JWT_COOKIE_SECURE`: Enforces HTTPS-only transmission.
+   - `JWT_COOKIE_SAMESITE`: Set to `Lax` to prevent most CSRF attacks.
+   - `JWT_COOKIE_CSRF_PROTECT`: Implicitly enabled when HTTPS is active, requiring a `X-CSRF-TOKEN` header on modifying requests.
+3. **Rate Limiting**: `Flask-Limiter` protects sensitive endpoints (like signup and login) to prevent brute-force credential stuffing.
 
 ---
 
@@ -45,13 +50,13 @@ Authenticates an existing Organizer.
 }
 ```
 
-**Response (200 OK)**: Returns account details and sets the JWT access cookie.
+**Response (200 OK)**: Returns account details, sets the JWT access cookie, and returns a CSRF token.
 
 ### 3. `POST /auth/api/logout`
 
 Logs out the current Organizer.
 
-**Response (200 OK)**: Unsets the JWT cookies and adds the JWT ID (`jti`) to the database blocklist to prevent token reuse (replay attacks).
+**Response (200 OK)**: Unsets the JWT cookies and adds the JWT ID (`jti`) to the PostgreSQL `TokenBlocklist` table. We use a `@jwt.token_in_blocklist_loader` to verify this list on every request, preventing token replay attacks.
 
 ### 4. `GET /auth/api/me`
 
@@ -73,3 +78,8 @@ Fetches the currently authenticated Organizer's profile.
 ### 5. `GET /auth/api/status`
 
 Checks if the current session has a valid JWT token. Unlike `/me`, this endpoint does not require authentication; it simply returns `authenticated: false` if no valid token is present, which is useful for frontend routing guards.
+
+### 6. `POST /internal/token-refresh` (Internal)
+
+An internal API designed specifically for the `audio_grabber.py` subprocess.
+Since the background audio grabber runs detached from the browser, it cannot rely on long-lived cookies. It uses a short-lived internal token (defined by `INTERNAL_TOKEN_EXPIRY_MINUTES`), and hits this endpoint proactively at 80% of the expiry window to mint a fresh token, ensuring uninterrupted streaming for hours.
