@@ -241,17 +241,18 @@ def ready():
     checks: dict = {}
     ok = True
 
-    # --- Database ---
+    # Database
     try:
         from auth.models import db as _db
         with app.app_context():
             _db.session.execute(_db.text("SELECT 1"))
         checks["db"] = "ok"
     except Exception as exc:
-        checks["db"] = str(exc)
+        app.logger.error("Readiness check: DB unreachable: %s", exc, exc_info=True)
+        checks["db"] = "unreachable"
         ok = False
 
-    # --- Redis (only when REDIS_URL is explicitly set) ---
+    # Redis 
     _redis_url = os.getenv("REDIS_URL")
     if _redis_url:
         try:
@@ -260,12 +261,13 @@ def ready():
             _r.ping()
             checks["redis"] = "ok"
         except Exception as exc:
-            checks["redis"] = str(exc)
+            app.logger.error("Readiness check: Redis unreachable: %s", exc, exc_info=True)
+            checks["redis"] = "unreachable"
             ok = False
     else:
         checks["redis"] = "not configured"
 
-    # --- Audio worker ---
+    # Audio worker
     _worker_running = (
         _worker_future is not None and not _worker_future.done()
     )
