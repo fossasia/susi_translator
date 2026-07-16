@@ -35,14 +35,9 @@ from flask_admin import Admin
 from auth.admin_panel import SecureModelView, SecureAdminIndexView
 
 from providers.registry import ProviderRegistry
-import providers.plugins 
-from dotenv import load_dotenv
+import providers.plugins
 
 from audio_sources import URLSource, YouTubeSource
-
-
-# Load environment variables from .env file
-load_dotenv()
 
 # Log level: DEBUG in dev, INFO in production (controlled via FLASK_DEBUG env var)
 # This must come before load_dotenv so that the level is set correctly.
@@ -100,6 +95,19 @@ def _env_csv(name: str, default: str) -> list:
 app = Flask(__name__)
 # Nginx handles SSL termination, so we don't want Flask redirecting HTTP to HTTPS
 Talisman(app, content_security_policy=None, force_https=False)
+
+
+_proxy_count = int(os.getenv("TRUSTED_PROXY_COUNT", "0"))
+if _proxy_count > 0:
+    from werkzeug.middleware.proxy_fix import ProxyFix
+    app.wsgi_app = ProxyFix(
+        app.wsgi_app,
+        x_for=_proxy_count,
+        x_proto=_proxy_count,
+        x_host=_proxy_count,
+    )
+    logger.info("ProxyFix enabled with %d trusted proxy hop(s)", _proxy_count)
+
 sock = Sock(app)
 # Swagger UI is only exposed in development
 # In production it is disabled to reduce attack surface
@@ -222,6 +230,52 @@ def health():
     container orchestrators
     """
     return jsonify({"status": "ok"}), 200
+
+
+@app.route('/ready')
+def ready():
+    """
+    Readiness probe \u2014 returns 200 only when all critical dependencies are reachable.
+    Returns 503 if the database or Redis when configured but cannot be contacted.
+    """
+    checks: dict = {}
+    ok = True
+
+    # --- Database ---
+    try:
+        from auth.models import db as _db
+        with app.app_context():
+            _db.session.execute(_db.text("SELECT 1"))
+        checks["db"] = "ok"
+    except Exception as exc:
+        checks["db"] = str(exc)
+        ok = False
+
+    # --- Redis (only when REDIS_URL is explicitly set) ---
+    _redis_url = os.getenv("REDIS_URL")
+    if _redis_url:
+        try:
+            import redis as _redis_lib
+            _r = _redis_lib.from_url(_redis_url, socket_connect_timeout=1)
+            _r.ping()
+            checks["redis"] = "ok"
+        except Exception as exc:
+            checks["redis"] = str(exc)
+            ok = False
+    else:
+        checks["redis"] = "not configured"
+
+    # --- Audio worker ---
+    _worker_running = (
+        _worker_future is not None and not _worker_future.done()
+    )
+    checks["worker"] = "ok" if _worker_running else "stopped"
+
+    status_code = 200 if ok else 503
+    return jsonify({
+        "status": "ready" if ok else "unavailable",
+        "checks": checks,
+    }), status_code
 
 
 # Flask-Admin
@@ -1931,26 +1985,27 @@ class DeleteTranscriptLegacy(Resource):
         return jsonify(_delete_transcript_logic(request.args.get('chunk_id')))
 
 
-# Audio worker thread
+# Audio worker
 
-_worker_thread = None
+_worker_executor: ThreadPoolExecutor | None = None
+_worker_future = None
 _worker_lock = threading.Lock()
 
 
 def _start_worker_once():
-    """Start the audio-worker thread exactly once per process. Idempotent."""
-    global _worker_thread
+    """Start the audio-worker exactly once per process using a real OS thread
+    """
+    global _worker_executor, _worker_future
     with _worker_lock:
-        if _worker_thread is not None and _worker_thread.is_alive():
-            return _worker_thread
-        _worker_thread = threading.Thread(
-            target=process_audio,
-            name="audio-worker",
-            daemon=True,
+        if _worker_future is not None and not _worker_future.done():
+            return _worker_future
+        _worker_executor = ThreadPoolExecutor(
+            max_workers=1,
+            thread_name_prefix="audio-worker",
         )
-        _worker_thread.start()
-        logger.info("Audio worker thread started")
-        return _worker_thread
+        _worker_future = _worker_executor.submit(process_audio)
+        logger.info("Audio worker started (ThreadPoolExecutor — native OS thread)")
+        return _worker_future
 
 
 if _env_bool('TRANSCRIBE_AUTOSTART_WORKER', True):
