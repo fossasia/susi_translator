@@ -30,7 +30,7 @@ Creates a new Organizer account.
 ```json
 {
   "email": "user@example.com",
-  "password": "securepassword",
+  "password": "********",
   "name": "Jane Doe"
 }
 ```
@@ -46,7 +46,7 @@ Authenticates an existing Organizer.
 ```json
 {
   "email": "user@example.com",
-  "password": "securepassword"
+  "password": "********"
 }
 ```
 

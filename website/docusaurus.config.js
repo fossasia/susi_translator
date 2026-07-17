@@ -14,9 +14,6 @@ const config = {
   tagline: 'Documentation for SUSI Translator',
   favicon: 'img/favicon.ico',
 
-  future: {
-    v4: true,
-  },
 
   // Set the production url of your site here
   url: 'https://fossasia.github.io',
