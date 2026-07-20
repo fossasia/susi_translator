@@ -50,6 +50,12 @@ class BaseProvider(ABC):
         """
         pass
 
+    def unload_model(self) -> None:
+        """
+        Hook called on provider eviction to unload models from memory
+        """
+        pass
+
 
 class TranscriptionProvider(BaseProvider):
     """

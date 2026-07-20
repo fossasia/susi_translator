@@ -23,6 +23,49 @@ import uuid
 import wave
 import io
 import os
+import logging
+
+import site
+import ctypes
+
+def _preload_cuda_libs():
+    """
+    Dynamically loads CUDA libraries from the uv virtual environment so that
+    different models can seamlessly use either CUDA 12 or 13 
+    """
+    try:
+        site_packages = site.getsitepackages()
+    except Exception:
+        return
+        
+    for pkg_dir in site_packages:
+        nvidia_dir = os.path.join(pkg_dir, "nvidia")
+        if not os.path.exists(nvidia_dir):
+            continue
+            
+        # Prioritize CU12 for ctranslate2/faster-whisper, but also load CU13
+        # if other models request it. They coexist peacefully.
+        libs_to_load = [
+            "cublas/lib/libcublasLt.so.12",
+            "cublas/lib/libcublas.so.12",
+            "cudnn/lib/libcudnn.so.8",
+            "cudnn/lib/libcudnn_ops_infer.so.8",
+            "cudnn/lib/libcudnn_cnn_infer.so.8",
+            "cu13/lib/libcublasLt.so.13",
+            "cu13/lib/libcublas.so.13",
+        ]
+        
+        for lib_rel in libs_to_load:
+            lib_path = os.path.join(nvidia_dir, lib_rel)
+            if os.path.exists(lib_path):
+                try:
+                    ctypes.CDLL(lib_path, mode=ctypes.RTLD_GLOBAL)
+                    logging.debug(f"Preloaded CUDA library: {lib_rel}")
+                except Exception as e:
+                    logging.warning(f"Failed to preload {lib_path}: {e}")
+
+_preload_cuda_libs()
+
 import atexit
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
@@ -1344,13 +1387,15 @@ def _stream_caption_events(tenant_id, target_lang, last_chunk_id, wants_audio=Fa
                     try:
                         lang_config = registry.get_language_config(tenant_id)
                         source_lang = lang_config.get('source_lang', 'en')
-                        # Capture values for the closure
-                        _text, _src, _tgt = text, source_lang, target_lang
-                        fut = translation_executor.submit(
-                            registry.translate, tenant_id, _text, _src, _tgt
-                        )
-                        pending_translations[cid] = (fut, text)
-                        can_translate = False  # Only 1 submission per loop
+
+                        new_tl = registry.translate(tenant_id, text, source_lang, target_lang)
+                        if new_tl is not None:
+                            translation = new_tl
+                            last_translations[cid] = translation
+                            translated_transcripts[cid] = text
+                        last_translation_time = time.time()
+                        can_translate = False  # Only 1 translation per loop to spread load
+
                     except Exception as e:
                         logger.error(f"Stream translation submit error for {tenant_id}: {e}")
 
@@ -1433,7 +1478,6 @@ def translate_stream():
         sent_audio = {}
         last_keepalive = time.time()
 
-    def event_stream():
         yield f"data: {json.dumps({'status': 'connected'})}\n\n"
 
         try:
@@ -1464,10 +1508,10 @@ def translate_stream():
                                 lang_config = registry.get_language_config(tenant_id)
                                 source_lang = lang_config.get('source_lang', 'en')
                                 new_tl = registry.translate(tenant_id, text, source_lang, target_lang)
-                                if new_tl:
+                                if new_tl is not None:
                                     translation = new_tl
-                                last_translations[cid] = translation
-                                translated_transcripts[cid] = text
+                                    last_translations[cid] = translation
+                                    translated_transcripts[cid] = text
                                 last_translation_time = time.time()
                             except Exception as e:
                                 logger.error(f"Stream translation error for {tenant_id}: {e}")
@@ -1528,9 +1572,10 @@ def translate_stream():
             logger.info(f"SSE Client disconnected for tenant {tenant_id}")
         finally:
             with stream_connections_lock:
-                stream_connections[tenant_id] -= 1
-                if stream_connections[tenant_id] <= 0:
-                    del stream_connections[tenant_id]
+                if tenant_id in stream_connections:
+                    stream_connections[tenant_id] -= 1
+                    if stream_connections[tenant_id] <= 0:
+                        del stream_connections[tenant_id]
 
     return Response(event_stream(), mimetype="text/event-stream")
 
