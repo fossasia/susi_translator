@@ -41,6 +41,9 @@ dependencies = [
     "soundfile",
     "numba>=0.59.0",
     "flask-talisman>=1.1.0",
+    "nvidia-cublas-cu12",
+    "nvidia-cuda-runtime-cu12",
+    "nvidia-cudnn-cu12",
 ]
 
 [tool.uv]

@@ -153,7 +153,7 @@ class NLLBCTranslate2Provider(TranslationProvider):
 
             _CUDA_LIB_HINTS = frozenset([
                 "cannot be loaded", "not found", "libcublas", "libcudnn",
-                "libcurand", "CUDA error", "cudaErrorNoDevice",
+                "libcurand", "CUDA error", "cudaErrorNoDevice", "timed out",
             ])
 
             def _load(dev: str, ctype: str) -> None:
@@ -167,6 +167,28 @@ class NLLBCTranslate2Provider(TranslationProvider):
                 )
                 # Tokenizer is pure Python/sentencepiece — device-agnostic
                 self._tokenizer = AutoTokenizer.from_pretrained(self._model_id)
+
+                if dev == "cuda":
+                    import threading
+                    warmup_success = False
+                    
+                    def _warmup():
+                        nonlocal warmup_success
+                        try:
+                            # Run a dummy inference to trigger CUDA initialization
+                            self._translator.translate_batch([["eng_Latn", "</s>"]], target_prefix=[["eng_Latn"]])
+                            warmup_success = True
+                        except Exception:
+                            pass
+
+                    t = threading.Thread(target=_warmup)
+                    t.daemon = True
+                    t.start()
+                    t.join(timeout=8.0)
+                    
+                    if not warmup_success:
+                        raise RuntimeError("CUDA inference timed out (likely missing libcublas).")
+
                 self.device = dev
                 logger.info(
                     f"[{self.provider_name}] Model '{self._model_id}' loaded successfully "
@@ -197,6 +219,15 @@ class NLLBCTranslate2Provider(TranslationProvider):
                 raise ProviderConfigError(
                     f"[{self.provider_name}] Failed to load NLLB CTranslate2 model: {e}"
                 ) from e
+
+    def unload_model(self) -> None:
+        with self._lock:
+            if self._translator is not None or self._tokenizer is not None:
+                logger.info(f"[{self.provider_name}] Unloading model '{self._model_id}' from {self.device} to free memory.")
+                self._translator = None
+                self._tokenizer = None
+                import gc
+                gc.collect()
 
     def translate(
         self,
@@ -241,19 +272,24 @@ class NLLBCTranslate2Provider(TranslationProvider):
                 # Tokenize to token strings
                 encoded = self._tokenizer(text)
                 input_tokens = self._tokenizer.convert_ids_to_tokens(encoded["input_ids"])
-                results = self._translator.translate_batch(
-                    [input_tokens],
-                    target_prefix=[[target_lang]],
-                    beam_size=self._num_beams,
-                    max_decoding_length=max_decoding_length,
-                    repetition_penalty=1.2,
-                    no_repeat_ngram_size=3,
-                )
+                
+                translator_ref = self._translator
+                tokenizer_ref = self._tokenizer
 
-                # Strip the forced target-lang prefix token before decoding
-                output_tokens = results[0].hypotheses[0][1:]
-                output_ids = self._tokenizer.convert_tokens_to_ids(output_tokens)
-                result = self._tokenizer.decode(output_ids, skip_special_tokens=True)
+            # Run inference concurrently without holding the provider lock
+            results = translator_ref.translate_batch(
+                [input_tokens],
+                target_prefix=[[target_lang]],
+                beam_size=self._num_beams,
+                max_decoding_length=max_decoding_length,
+                repetition_penalty=1.2,
+                no_repeat_ngram_size=3,
+            )
+
+            # Strip the forced target-lang prefix token before decoding
+            output_tokens = results[0].hypotheses[0][1:]
+            output_ids = tokenizer_ref.convert_tokens_to_ids(output_tokens)
+            result = tokenizer_ref.decode(output_ids, skip_special_tokens=True)
             return result.strip()
 
         try:

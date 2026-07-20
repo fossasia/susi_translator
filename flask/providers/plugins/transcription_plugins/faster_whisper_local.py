@@ -6,6 +6,7 @@ the faster-whisper library backed by the CTranslate2 inference engine
 from __future__ import annotations
 
 import logging
+import threading
 from typing import Any, Optional
 
 import numpy as np
@@ -20,6 +21,7 @@ class FasterWhisperLocalProvider(TranscriptionProvider):
     def __init__(self, config: Optional[dict] = None):
         super().__init__(config)
         self._model = None  # Loaded lazily on first transcribe() call
+        self._lock = threading.Lock()
 
         # Model identity
         self._model_size = self.config.get("model_size", "medium")
@@ -52,71 +54,80 @@ class FasterWhisperLocalProvider(TranscriptionProvider):
         """
         Load the faster-whisper model into memory
         """
-        if self._model is not None:
-            logger.info(
-                f"[faster_whisper] Model '{self._model_size}' already loaded in memory."
-            )
-            return
-
-        from faster_whisper import WhisperModel
-        import ctranslate2
-
-        # Resolve device
-        try:
-            device = self._device_config or (
-                "cuda" if ctranslate2.get_cuda_device_count() > 0 else "cpu"
-            )
-        except Exception:
-            device = self._device_config or "cpu"
-
-        # Resolve compute_type: INT8 is optimal on CPU; FP16 on CUDA
-        if self._compute_type:
-            compute_type = self._compute_type
-        else:
-            compute_type = "float16" if device == "cuda" else "int8"
-
-        logger.info(
-            f"[faster_whisper] Loading model='{self._model_size}' "
-            f"on device='{device}' with compute_type='{compute_type}'"
-        )
-
-        def _load(dev: str, ctype: str) -> None:
-            self._model = WhisperModel(
-                self._model_size,
-                device=dev,
-                compute_type=ctype,
-                cpu_threads=4,
-            )
-            self._resolved_device = dev
-            logger.info(
-                f"[faster_whisper] Model '{self._model_size}' loaded successfully "
-                f"on device='{dev}' compute_type='{ctype}'."
-            )
-
-        try:
-            _load(device, compute_type)
-        except RuntimeError as e:
-            _CUDA_LIB_HINTS = ("cannot be loaded", "not found", "libcublas", "libcudnn",
-                               "libcurand", "CUDA error", "cudaErrorNoDevice")
-            if device == "cuda" and any(h in str(e) for h in _CUDA_LIB_HINTS):
-                logger.warning(
-                    f"[faster_whisper] CUDA unavailable ({e}). "
-                    "Falling back to device='cpu' compute_type='int8'."
+        with self._lock:
+            if self._model is not None:
+                logger.info(
+                    f"[faster_whisper] Model '{self._model_size}' already loaded in memory."
                 )
-                try:
-                    _load("cpu", "int8")
-                except Exception as cpu_e:
-                    raise ProviderConfigError(
-                        f"[faster_whisper] CPU fallback also failed: {cpu_e}"
-                    ) from cpu_e
+                return
+
+            from faster_whisper import WhisperModel
+            import ctranslate2
+
+            # Resolve device
+            try:
+                device = self._device_config or (
+                    "cuda" if ctranslate2.get_cuda_device_count() > 0 else "cpu"
+                )
+            except Exception:
+                device = self._device_config or "cpu"
+
+            # Resolve compute_type: INT8 is optimal on CPU; FP16 on CUDA
+            if self._compute_type:
+                compute_type = self._compute_type
             else:
+                compute_type = "float16" if device == "cuda" else "int8"
+
+            logger.info(
+                f"[faster_whisper] Loading model='{self._model_size}' "
+                f"on device='{device}' with compute_type='{compute_type}'"
+            )
+
+            def _load(dev: str, ctype: str) -> None:
+                self._model = WhisperModel(
+                    self._model_size,
+                    device=dev,
+                    compute_type=ctype,
+                    cpu_threads=4,
+                )
+                self._resolved_device = dev
+                logger.info(
+                    f"[faster_whisper] Model '{self._model_size}' loaded successfully "
+                    f"on device='{dev}' compute_type='{ctype}'."
+                )
+
+            try:
+                _load(device, compute_type)
+            except RuntimeError as e:
+                _CUDA_LIB_HINTS = ("cannot be loaded", "not found", "libcublas", "libcudnn",
+                                   "libcurand", "CUDA error", "cudaErrorNoDevice")
+                if device == "cuda" and any(h in str(e) for h in _CUDA_LIB_HINTS):
+                    logger.warning(
+                        f"[faster_whisper] CUDA unavailable ({e}). "
+                        "Falling back to device='cpu' compute_type='int8'."
+                    )
+                    try:
+                        _load("cpu", "int8")
+                    except Exception as cpu_e:
+                        raise ProviderConfigError(
+                            f"[faster_whisper] CPU fallback also failed: {cpu_e}"
+                        ) from cpu_e
+                else:
+                    raise ProviderConfigError(
+                        f"[faster_whisper] Failed to load model '{self._model_size}': {e}"
+                    ) from e
+            except Exception as e:
                 raise ProviderConfigError(
                     f"[faster_whisper] Failed to load model '{self._model_size}': {e}"
                 ) from e
-        except Exception as e:
-            raise ProviderConfigError(
-                f"[faster_whisper] Failed to load model '{self._model_size}': {e}"
-            ) from e
+
+    def unload_model(self) -> None:
+        with self._lock:
+            if self._model is not None:
+                logger.info(f"[faster_whisper] Unloading model '{self._model_size}' from {self._resolved_device} to free memory.")
+                self._model = None
+                import gc
+                gc.collect()
 
     _CUDA_LIB_HINTS = frozenset([
         "cannot be loaded", "not found", "libcublas", "libcudnn",
