@@ -35,14 +35,16 @@ from flask_admin import Admin
 from auth.admin_panel import SecureModelView, SecureAdminIndexView
 
 from providers.registry import ProviderRegistry
-import providers.plugins
+import providers.plugins 
+from dotenv import load_dotenv
 
 from audio_sources import URLSource, YouTubeSource
 
-# Log level: DEBUG in dev, INFO in production (controlled via FLASK_DEBUG env var)
-# This must come before load_dotenv so that the level is set correctly.
-_log_level = logging.DEBUG if os.environ.get('FLASK_DEBUG', '').strip().lower() in ('1', 'true', 'yes', 'on') else logging.INFO
-logging.basicConfig(level=_log_level, format='%(asctime)s %(levelname)s: %(message)s')
+
+# Load environment variables from .env file
+load_dotenv()
+
+logging.basicConfig(level=logging.DEBUG, format='%(asctime)s %(levelname)s: %(message)s')
 logger = logging.getLogger(__name__)
 
 # Known-weak placeholders that must never be used in production.
@@ -95,25 +97,9 @@ def _env_csv(name: str, default: str) -> list:
 app = Flask(__name__)
 # Nginx handles SSL termination, so we don't want Flask redirecting HTTP to HTTPS
 Talisman(app, content_security_policy=None, force_https=False)
-
-
-_proxy_count = int(os.getenv("TRUSTED_PROXY_COUNT", "0"))
-if _proxy_count > 0:
-    from werkzeug.middleware.proxy_fix import ProxyFix
-    app.wsgi_app = ProxyFix(
-        app.wsgi_app,
-        x_for=_proxy_count,
-        x_proto=_proxy_count,
-        x_host=_proxy_count,
-    )
-    logger.info("ProxyFix enabled with %d trusted proxy hop(s)", _proxy_count)
-
 sock = Sock(app)
-# Swagger UI is only exposed in development
-# In production it is disabled to reduce attack surface
-_swagger_doc = '/swagger' if _env_bool('FLASK_DEBUG', False) else False
 api = Api(app, version='1.0', title='Transcription API',
-          description='A simple Transcription API', doc=_swagger_doc,
+          description='A simple Transcription API', doc='/swagger',
           decorators=[organizer_required])
 
 # CORS configuration from .env file
@@ -223,63 +209,6 @@ def handle_global_exception(e):
     }), 500
 
 
-@app.route('/health')
-def health():
-    """
-    Liveness probe for Docker HEALTHCHECK, Nginx upstream checks, and
-    container orchestrators
-    """
-    return jsonify({"status": "ok"}), 200
-
-
-@app.route('/ready')
-def ready():
-    """
-    Readiness probe \u2014 returns 200 only when all critical dependencies are reachable.
-    Returns 503 if the database or Redis when configured but cannot be contacted.
-    """
-    checks: dict = {}
-    ok = True
-
-    # Database
-    try:
-        from auth.models import db as _db
-        with app.app_context():
-            _db.session.execute(_db.text("SELECT 1"))
-        checks["db"] = "ok"
-    except Exception as exc:
-        app.logger.error("Readiness check: DB unreachable: %s", exc, exc_info=True)
-        checks["db"] = "unreachable"
-        ok = False
-
-    # Redis 
-    _redis_url = os.getenv("REDIS_URL")
-    if _redis_url:
-        try:
-            import redis as _redis_lib
-            _r = _redis_lib.from_url(_redis_url, socket_connect_timeout=1)
-            _r.ping()
-            checks["redis"] = "ok"
-        except Exception as exc:
-            app.logger.error("Readiness check: Redis unreachable: %s", exc, exc_info=True)
-            checks["redis"] = "unreachable"
-            ok = False
-    else:
-        checks["redis"] = "not configured"
-
-    # Audio worker
-    _worker_running = (
-        _worker_future is not None and not _worker_future.done()
-    )
-    checks["worker"] = "ok" if _worker_running else "stopped"
-
-    status_code = 200 if ok else 503
-    return jsonify({
-        "status": "ready" if ok else "unavailable",
-        "checks": checks,
-    }), status_code
-
-
 # Flask-Admin
 from flask_admin.theme import Bootstrap4Theme
 admin = Admin(app, name='SUSI Admin', theme=Bootstrap4Theme(swatch='flatly'), url='/admin', index_view=SecureAdminIndexView())
@@ -302,21 +231,17 @@ grabber_lock = threading.Lock()
 
 # FIFO queue of pending audio chunks awaiting transcription.
 audio_stack = queue.Queue()
-# Companion lock with shadow list for gevent-safe peeking inside the queue.
-# gevent's Queue removes the stdlib `.mutex` / `.queue` internals,
-# so we maintain our own parallel structure.
-audio_stack_lock = threading.Lock()
-_audio_stack_items: list = []  # mirrors audio_stack contents as (tenant_id, chunk_id, audiob64)
 VALID_SOURCES = {"mic", "file", "url", "stdin", "youtube", "unspecified"}
 latest_session_by_source = {s: None for s in VALID_SOURCES}
 session_lock = threading.Lock()
 SESSION_TTL_SECONDS = int(os.getenv('SESSION_TTL_SECONDS', '7200'))
 
-#TTS 
+#TTS
 _supertonic_tts = None
 _tts_lock = threading.Lock()
 tts_inference_lock = threading.Lock()
 tts_executor = ThreadPoolExecutor(max_workers=1)
+translation_executor = ThreadPoolExecutor(max_workers=1)
 class SizeBoundedTTSCache:
     def __init__(self, max_size_bytes=50 * 1024 * 1024):
         self.cache = OrderedDict()
@@ -410,17 +335,18 @@ def generate_tts_sync(text, target_lang):
         # Get voice style, fallback to F1 if not mapped
         style_name = TTS_VOICE_STYLES.get(target_lang, "F1")
         voice_style = tts_engine.get_voice_style(voice_name=style_name)
-        
-        with tts_inference_lock:
-            wav, duration = tts_engine.synthesize(
-                text=text, 
-                lang=lang_tag, 
-                voice_style=voice_style,
-                total_steps=8,  # Default medium quality
-                speed=1.0
-            )
-        
-        # Supertonic outputs a numpy array. Convert to 16-bit PCM WAV.
+        try:
+            with tts_inference_lock:
+                wav, duration = tts_engine.synthesize(
+                    text=text, 
+                    lang=lang_tag, 
+                    voice_style=voice_style,
+                    total_steps=8,  # Default medium quality
+                    speed=1.0
+                )
+        except Exception as e:
+            logger.error(f"Synthesis failed: {e}")
+            raise
         buf = io.BytesIO()
         sample_rate = getattr(tts_engine, 'sample_rate', 44100)
         sf.write(buf, wav.squeeze(), sample_rate, format='WAV', subtype='PCM_16')
@@ -437,6 +363,14 @@ def _async_generate_tts(text, target_lang, cache_key, chunk_id=None, tenant_id=N
             # A newer request for this chunk is queued. Skip this obsolete one!
             tts_cache.pop(cache_key, None)
             return
+
+    # Transcription has higher priority than TTS.
+    # Wait up to 4 seconds for pending audio chunks to drain before starting
+    # synthesis. This prevents TTS from competing with Whisper for CPU cycles
+    # when there is still audio waiting to be transcribed.
+    deadline = time.time() + 4.0
+    while audio_stack.qsize() > 0 and time.time() < deadline:
+        time.sleep(0.2)
 
     try:
         audio_b64 = generate_tts_sync(text, target_lang)
@@ -543,54 +477,38 @@ def _resolve_tenant(args, default='0000'):
     return default
 
 
-def _audio_stack_put(tenant_id, chunk_id, audiob64):
-    """Enqueue an item onto audio_stack and mirror it in _audio_stack_items"""
-    with audio_stack_lock:
-        _audio_stack_items.append((tenant_id, chunk_id, audiob64))
-        audio_stack.put((tenant_id, chunk_id, audiob64))
-
-
-def _audio_stack_get():
-    """Dequeue an item from audio_stack and remove the oldest matching mirror entry."""
-    item = audio_stack.get()
-    tenant_id, chunk_id, audiob64 = item
-    with audio_stack_lock:
-        for i, entry in enumerate(_audio_stack_items):
-            if entry[0] == tenant_id and entry[1] == chunk_id:
-                _audio_stack_items.pop(i)
-                break
-    return tenant_id, chunk_id, audiob64
-
-
 def _next_payload():
     """
     Pull the next audio payload from audio stack, dropping any superseded
-    duplicates so we only transcribe the latest version of each chunk.
-
-    Uses a companion lock + shadow list instead of stdlib Queue internals
-    (.mutex / .queue) which are not available under gevent's monkey-patched Queue.
+    duplicates so we only transcribe the latest version of each chunk
     """
     # 192_000 raw bytes = 96_000 int16 samples = 6 seconds at 16kHz
     # Base64 inflates by 4/3, so we set the threshold to 256_000 encoded characters.
     _MAX_SKIP_BYTES = 256_000
 
-    tenant_id, chunk_id, audiob64 = _audio_stack_get()
+    tenant_id, chunk_id, audiob64 = audio_stack.get()
     while True:
         # If the current payload is already large, just process it now.
         current_size = len(audiob64) if audiob64 else 0
         if current_size >= _MAX_SKIP_BYTES:
             return tenant_id, chunk_id, audiob64
 
-        with audio_stack_lock:
+        if hasattr(audio_stack, "mutex"):
+            with audio_stack.mutex:
+                has_newer = any(
+                    t == tenant_id and c == chunk_id
+                    for (t, c, _) in audio_stack.queue
+                )
+        else:
             has_newer = any(
                 t == tenant_id and c == chunk_id
-                for (t, c, _) in _audio_stack_items
+                for (t, c, _) in audio_stack.queue
             )
         if not has_newer:
             return tenant_id, chunk_id, audiob64
 
         audio_stack.task_done()
-        tenant_id, chunk_id, audiob64 = _audio_stack_get()
+        tenant_id, chunk_id, audiob64 = audio_stack.get()
 
 
 
@@ -628,8 +546,9 @@ def process_audio():
                     if current_transcript:
                         # buffer for the same chunk, so overwrite rather than concatenate.
                         current_transcript['transcript'] = transcript
+                        current_transcript['last_update'] = time.time()
                     else:
-                        transcripts[chunk_id] = {'transcript': transcript}
+                        transcripts[chunk_id] = {'transcript': transcript, 'last_update': time.time()}
             else:
                 logger.warning(f"INVALID transcript for chunk_id {chunk_id}: {transcript}")
 
@@ -912,7 +831,7 @@ def _transcribe_logic(success_status: int = 202):
             return {"error": "Forbidden or invalid tenant scope.", "status": "error"}, 403
 
     # push to processing queue
-    _audio_stack_put(tenant_id, chunk_id, audio_b64)
+    audio_stack.put((tenant_id, chunk_id, audio_b64))
     return {"chunk_id": chunk_id, "tenant_id": tenant_id, "status": "processing"}, success_status
 
 
@@ -1084,7 +1003,7 @@ def _transcripts_size_logic():
     t = {k: v for k, v in t.items() if _in_chunk_range(k, fromid, untilid)}
     return {'size': len(t)}
 
-UPLOAD_FOLDER = os.path.abspath(os.path.join(os.path.dirname(__file__), 'instance', 'uploads'))
+UPLOAD_FOLDER = os.path.abspath(os.path.join('instance', 'uploads'))
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 ALLOWED_EXTENSIONS ={'mp3', 'wav', 'm4a', 'ogg', 'flac', 'mp4', 'aac'}
@@ -1260,9 +1179,7 @@ def configure_provider():
                 cmd.append("--realtime")
             elif stream_type in ("url", "youtube"):
                 cmd.extend(["--url", stream_url])
-            # Pass the auth token via environment variable
-            # Explicitly construct a minimal environment to avoid leaking
-            # sensitive parent vars to the subprocess.
+
             safe_env_keys = {"PATH", "LANG", "LC_ALL", "USER", "HOME", "PYTHONPATH", "VIRTUAL_ENV"}
             grabber_env = {k: os.environ[k] for k in safe_env_keys if k in os.environ}
             grabber_env["GRABBER_AUTH_TOKEN"] = internal_token
@@ -1342,6 +1259,11 @@ def _stream_caption_events(tenant_id, target_lang, last_chunk_id, wants_audio=Fa
     last_translation_time = 0.0
     sent_audio = {}
     loop_counter = 0
+    pending_translations = {}
+    # Track when each chunk's text last changed 
+    chunk_last_text = {}     
+    chunk_stable_since = {}  
+    TEXT_STABLE_SECS = 2.0    
 
     while True:
         loop_counter += 1
@@ -1356,72 +1278,125 @@ def _stream_caption_events(tenant_id, target_lang, last_chunk_id, wants_audio=Fa
             tenant_transcripts = dict(transcriptd.get(tenant_id, {}))
 
         now = time.time()
-        # Default throttle interval
-        throttle_interval = 0.0
-        can_translate = (now - last_translation_time) >= throttle_interval
+        # No global throttle — translations are already gated to finalized chunks only
+        can_translate = True
 
         events_to_send = []
 
-        for cid in _numeric_sorted_keys(tenant_transcripts):
+        sorted_cids = _numeric_sorted_keys(tenant_transcripts)
+        max_cid = sorted_cids[-1] if sorted_cids else None
+
+        for cid in sorted_cids:
             cid_int = _chunk_id_int(cid)
             if cid_int >= last_chunk_id:
                 text = tenant_transcripts[cid]['transcript']
+                is_final = (cid != max_cid)
+
+                if chunk_last_text.get(cid) != text:
+                    chunk_last_text[cid] = text
+                    chunk_stable_since[cid] = now
+                    
+                    if cid in pending_translations:
+                        old_fut, _ = pending_translations.pop(cid)
+                        old_fut.cancel()  
+
+                text_is_stable = (now - chunk_stable_since.get(cid, now)) >= TEXT_STABLE_SECS
 
                 needs_tx_update = sent_transcripts.get(cid) != text
-                needs_tl_update = target_lang and (translated_transcripts.get(cid) != text)
+                # Only translate finalized chunks whose text has been stable long enough.
+                needs_tl_update = (
+                    target_lang
+                    and is_final
+                    and text_is_stable
+                    and (translated_transcripts.get(cid) != text)
+                )
 
                 translation = last_translations.get(cid, "")
+                newly_translated = False
 
-                if needs_tl_update and can_translate:
+                # Check if a previously submitted async translation is done
+                pending = pending_translations.get(cid)
+                if pending is not None:
+                    fut, pending_text = pending
+                    if fut.done():
+                        del pending_translations[cid]
+                        try:
+                            new_tl = fut.result()
+                            if pending_text != text:
+                                logger.debug(
+                                    f"[TTS] Discarding stale translation for chunk {cid}: "
+                                    f"text changed since submission (was {len(pending_text)}c, "
+                                    f"now {len(text)}c)"
+                                )
+                                # Do NOT set newly_translated — discard this result entirely
+                            elif new_tl:
+                                translation = new_tl
+                                last_translations[cid] = translation
+                                translated_transcripts[cid] = pending_text
+                                last_translation_time = time.time()
+                                needs_tl_update = False  # Already translated
+                                newly_translated = True
+                        except Exception as e:
+                            logger.error(f"Async translation error for {tenant_id}/{cid}: {e}")
+
+                # Submit a new async translation if needed and no pending one
+                if needs_tl_update and can_translate and cid not in pending_translations:
                     try:
                         lang_config = registry.get_language_config(tenant_id)
                         source_lang = lang_config.get('source_lang', 'en')
-                        new_tl = registry.translate(tenant_id, text, source_lang, target_lang)
-                        if new_tl:
-                            translation = new_tl
-                        last_translations[cid] = translation
-                        translated_transcripts[cid] = text
-                        last_translation_time = time.time()
-                        can_translate = False  # Only 1 translation per loop to spread load
+                        # Capture values for the closure
+                        _text, _src, _tgt = text, source_lang, target_lang
+                        fut = translation_executor.submit(
+                            registry.translate, tenant_id, _text, _src, _tgt
+                        )
+                        pending_translations[cid] = (fut, text)
+                        can_translate = False  # Only 1 submission per loop
                     except Exception as e:
-                        logger.error(f"Stream translation error for {tenant_id}: {e}")
+                        logger.error(f"Stream translation submit error for {tenant_id}: {e}")
 
-                is_ready_update = needs_tx_update or (needs_tl_update and translated_transcripts.get(cid) == text)
-                
-                tts_text = translation if target_lang else text
+                # Send transcript updates in real time.
+                # Send translation update only when it *just* arrived (newly_translated).
+                # This prevents sending the same translation text on every loop iteration.
+                is_ready_update = needs_tx_update or newly_translated
+
                 needs_audio_update = False
                 audio_b64 = None
 
-                if wants_audio and tts_text:
-                    # Truncate extremely long texts to prevent CPU DoS during synthesis
-                    if len(tts_text) > 300:
-                        tts_text = tts_text[:297] + "..."
-                    
-                    lang_to_speak = target_lang if target_lang else registry.get_language_config(tenant_id).get('source_lang', 'en')
-                    cache_key = (lang_to_speak, tts_text)
-                    cached_audio = tts_cache.get(cache_key)
-                    
-                    if cached_audio in ('pending', 'failed'):
-                        pass
-                    elif cached_audio is not None:
-                        audio_b64 = cached_audio
-                        if sent_audio.get(cid) != tts_text:
+                # TTS: Check the cache for audio if this chunk is finalized and we want audio.
+                if wants_audio and is_final:
+                    tts_text = translation if target_lang else text
+                    if tts_text and sent_audio.get(cid) != tts_text:
+                        lang_to_speak = target_lang if target_lang else registry.get_language_config(tenant_id).get('source_lang', 'en')
+                        cache_key = (lang_to_speak, tts_text)
+                        cached_audio = tts_cache.get(cache_key)
+
+                        if cached_audio in ('pending', 'failed'):
+                            pass
+                        elif cached_audio is not None:
+                            audio_b64 = cached_audio
                             needs_audio_update = True
-                    else:
-                        latest_tts_requests[(tenant_id, cid)] = tts_text
-                        tts_cache[cache_key] = 'pending'
-                        tts_executor.submit(_async_generate_tts, tts_text, lang_to_speak, cache_key, cid, tenant_id)
+                        else:
+                            # Not in cache and not pending. Submit it if it just became final/translated.
+                            # For target_lang, we wait for newly_translated. For no translation, we submit immediately on is_final.
+                            if (target_lang and newly_translated) or (not target_lang):
+                                if len(tts_text) > 300:
+                                    tts_text = tts_text[:297] + "..."
+                                latest_tts_requests[(tenant_id, cid)] = tts_text
+                                tts_cache[cache_key] = 'pending'
+                                tts_executor.submit(_async_generate_tts, tts_text, lang_to_speak, cache_key, cid, tenant_id)
 
                 if is_ready_update or needs_audio_update:
                     payload = {
                         "chunk_id": cid,
                         "transcript": text,
-                        "translation": translation,
+                        # Only include translation in the payload when it has been finalized.
+                        # For in-progress chunks, omit it so the UI keeps the previous translation visible.
+                        "translation": translation if (is_final or not target_lang) else "",
                     }
-                    
+
                     if needs_audio_update and audio_b64:
                         payload["audio_b64"] = audio_b64
-                        sent_audio[cid] = tts_text
+                        sent_audio[cid] = translation or text
 
                     events_to_send.append(payload)
                     sent_transcripts[cid] = text
@@ -1568,22 +1543,12 @@ def _translate_stream_ws_handler(ws):
         except ConnectionClosed:
             return
 
-        last_ping_time = time.time()
-
         try:
             for events_to_send, should_stop in _stream_caption_events(tenant_id, target_lang, last_chunk_id, wants_audio):
                 for payload in events_to_send:
                     ws.send(json.dumps(payload))
                 if should_stop:
                     break
-
-                # Send a keepalive ping every 20s so proxies
-                # don't kill the idle connection on their idle-timeout.
-                now = time.time()
-                if now - last_ping_time >= 20:
-                    ws.send(json.dumps({'status': 'ping'}))
-                    last_ping_time = now
-
                 _ = ws.receive(timeout=0.2)
 
         except ConnectionClosed:
@@ -1987,27 +1952,26 @@ class DeleteTranscriptLegacy(Resource):
         return jsonify(_delete_transcript_logic(request.args.get('chunk_id')))
 
 
-# Audio worker
+# Audio worker thread
 
-_worker_executor: ThreadPoolExecutor | None = None
-_worker_future = None
+_worker_thread = None
 _worker_lock = threading.Lock()
 
 
 def _start_worker_once():
-    """Start the audio-worker exactly once per process using a real OS thread
-    """
-    global _worker_executor, _worker_future
+    """Start the audio-worker thread exactly once per process. Idempotent."""
+    global _worker_thread
     with _worker_lock:
-        if _worker_future is not None and not _worker_future.done():
-            return _worker_future
-        _worker_executor = ThreadPoolExecutor(
-            max_workers=1,
-            thread_name_prefix="audio-worker",
+        if _worker_thread is not None and _worker_thread.is_alive():
+            return _worker_thread
+        _worker_thread = threading.Thread(
+            target=process_audio,
+            name="audio-worker",
+            daemon=True,
         )
-        _worker_future = _worker_executor.submit(process_audio)
-        logger.info("Audio worker started (ThreadPoolExecutor — native OS thread)")
-        return _worker_future
+        _worker_thread.start()
+        logger.info("Audio worker thread started")
+        return _worker_thread
 
 
 if _env_bool('TRANSCRIBE_AUTOSTART_WORKER', True):
@@ -2030,6 +1994,12 @@ def redirect_root():
     """Intercept bare root URL and redirect to home."""
     if request.path == "/":
         return redirect(url_for("home"))
+
+
+@app.route('/favicon.ico')
+def favicon():
+    """Return empty 204 for favicon requests to suppress 404 log spam."""
+    return '', 204
 
 
 @app.route("/home")
@@ -2071,21 +2041,10 @@ def stream_page(tenant_id: str):
 
 
 if __name__ == '__main__':
-    #PRODUCTION: Do NOT use this block
-    #gunicorn -k gevent -w 1 --worker-connections 1000 \
-    #         -b 0.0.0.0:5040 transcribe_server:app
+    # Server bind config is env-driven so the defaults are SAFE:
     host = os.getenv('FLASK_HOST', '127.0.0.1')
     port = int(os.getenv('FLASK_PORT', '5040'))
     debug = _env_bool('FLASK_DEBUG', False)
-
-    if not debug:
-        logger.warning(
-            "Starting with Werkzeug dev server. "
-            "For production use gunicorn: "
-            "gunicorn -k gevent -w 1 --worker-connections 1000 "
-            "-b %s:%s transcribe_server:app",
-            host, port,
-        )
 
     if debug and host not in ('127.0.0.1', 'localhost'):
         logger.warning(
@@ -2097,5 +2056,10 @@ if __name__ == '__main__':
 
     # use_reloader=False because the audio-worker thread above must not be spawned twice
     # NOTE: Do NOT use ssl_context='adhoc' in production.
+    # In production, run Flask behind a reverse proxy (Nginx or Caddy) that handles
+    # HTTPS with a real certificate (e.g. Let's Encrypt). Flask serves plain HTTP
+    # on localhost, and the proxy terminates TLS externally.
+    # For local development with mic access (requires HTTPS), you can temporarily
+    # set ssl_context='adhoc' after installing pyopenssl, but never commit that to prod.
     ssl_ctx = os.getenv('FLASK_SSL_CONTEXT', None)  # set to 'adhoc' only for local dev
     app.run(host=host, port=port, debug=debug, use_reloader=False, ssl_context=ssl_ctx or None)
