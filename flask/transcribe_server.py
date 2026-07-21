@@ -1386,6 +1386,13 @@ def translate_stream():
 
     _assert_tenant_ownership(tenant_id)
 
+    with stream_connections_lock:
+        current_connections = stream_connections.get(tenant_id, 0)
+        if current_connections >= MAX_STREAM_CONNECTIONS_PER_TENANT:
+            logger.warning(f"SSE connection cap reached for tenant {tenant_id}")
+            return jsonify({"status": "error", "message": "Too many connections."}), 429
+        stream_connections[tenant_id] = current_connections + 1
+
     target_lang = request.args.get('target_lang')
     if target_lang == 'original':
         target_lang = None
