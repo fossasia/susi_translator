@@ -119,7 +119,9 @@ stream_connections = {}
 stream_connections_lock = threading.Lock()
 
 # Database, Auth, JWT 
-_db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "instance", "susi.db")
+_db_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "instance")
+os.makedirs(_db_dir, exist_ok=True)
+_db_path = os.path.join(_db_dir, "susi.db")
 app.config["SQLALCHEMY_DATABASE_URI"] = os.getenv("DATABASE_URL", f"sqlite:///{_db_path}")
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 app.config["JWT_SECRET_KEY"] = _require_secret_key("JWT_SECRET_KEY")
