@@ -245,15 +245,17 @@ def test_generate_tts_sync_smoke(mock_get_engine):
 def test_stream_audio_background_dispatch(mock_translate, mock_executor, mock_jwt, mock_verify, mock_assert, client, ts):
     """Verify that translate/stream?audio=true dispatches to the background worker."""
     with ts.transcripts_lock:
-        ts.transcriptd["test-audio-tenant"] = {"0": {"transcript": "hello"}}
+        ts.transcriptd["test-audio-tenant"] = {"0": {"transcript": "hello"}, "1": {"transcript": "world"}}
     
     resp = client.get("/api/v1/translate/stream?tenant_id=test-audio-tenant&audio=true&target_lang=es")
     
     iterator = iter(resp.response)
     lines = []
-    for _ in range(2):
+    for _ in range(8):
         try:
             lines.append(next(iterator))
+            if mock_executor.submit.called:
+                break
         except StopIteration:
             break
             

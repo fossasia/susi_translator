@@ -4,7 +4,7 @@ import time
 
 
 def test_next_payload_returns_singleton_when_no_dups(ts):
-    ts._audio_stack_put("t1", "c1", "data-c1")
+    ts.audio_stack.put(("t1", "c1", "data-c1"))
     got = ts._next_payload()
     assert got == ("t1", "c1", "data-c1")
     assert ts.audio_stack.unfinished_tasks == 1
@@ -13,9 +13,9 @@ def test_next_payload_returns_singleton_when_no_dups(ts):
 
 
 def test_next_payload_collapses_duplicate_chunks(ts):
-    ts._audio_stack_put("t1", "c1", "old1")
-    ts._audio_stack_put("t1", "c1", "old2")
-    ts._audio_stack_put("t1", "c1", "newest")
+    ts.audio_stack.put(("t1", "c1", "old1"))
+    ts.audio_stack.put(("t1", "c1", "old2"))
+    ts.audio_stack.put(("t1", "c1", "newest"))
     got = ts._next_payload()
     assert got == ("t1", "c1", "newest")
     # Older duplicates were task_done'd inside _next_payload, so join() doesn't hang.
@@ -25,10 +25,10 @@ def test_next_payload_collapses_duplicate_chunks(ts):
 
 
 def test_next_payload_only_dedups_same_tenant_and_chunk(ts):
-    ts._audio_stack_put("t1", "c1", "v1")
-    ts._audio_stack_put("t2", "c1", "x")      # different tenant
-    ts._audio_stack_put("t1", "c2", "y")      # different chunk
-    ts._audio_stack_put("t1", "c1", "v2")     # newer dup of the head
+    ts.audio_stack.put(("t1", "c1", "v1"))
+    ts.audio_stack.put(("t2", "c1", "x"))      # different tenant
+    ts.audio_stack.put(("t1", "c2", "y"))      # different chunk
+    ts.audio_stack.put(("t1", "c1", "v2"))     # newer dup of the head
 
     got = ts._next_payload()
     # Head ("t1","c1","v1") sees a newer dup (v2), so we discard the head and

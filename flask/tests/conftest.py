@@ -41,12 +41,10 @@ def ts():
 
     while not ts_mod.audio_stack.empty():
         try:
-            ts_mod._audio_stack_get()
+            ts_mod.audio_stack.get(block=False)
             ts_mod.audio_stack.task_done()
         except Exception:
             break
-    
-    ts_mod._audio_stack_items.clear()
 
     with ts_mod.grabber_lock:
         ts_mod.grabber_processes.clear()
