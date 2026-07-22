@@ -681,13 +681,13 @@ configure_input_model = api.model('ConfigureRequest', {
     'transcription': fields.Raw(
         required=False,
         description=(
-            'Transcription provider config, e.g. {"provider_name": "whisper_local", "model_size": "small"}.'
+            'Transcription provider config, e.g. {"provider_name": "faster_whisper", "model_size": "small"}.'
         ),
     ),
     'translation': fields.Raw(
         required=False,
         description=(
-            'Translation provider config, e.g. {"provider_name": "nllb_local"}.'
+            'Translation provider config, e.g. {"provider_name": "nllb_ctranslate2"}.'
         ),
     ),
     'stream_url': fields.String(

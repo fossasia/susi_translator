@@ -402,10 +402,16 @@ class ProviderRegistry:
             with self._lock:
                 if tenant_id in self._tenants and self._tenants[tenant_id].get(role):
                     self._tenants[tenant_id][role]["ready"] = True
+                    self._tenants[tenant_id][role].pop("warmup_error", None)
 
             logger.info(f"[Registry] Warmup complete for [{role}] provider '{provider.provider_name}' tenant '{tenant_id}'")
         except Exception as e:
             logger.error(f"[Registry] Warmup failed for [{role}] tenant '{tenant_id}': {e}")
+            # Surface the failure so /status can return a meaningful error instead of
+            # leaving the slot stuck in a permanent warming_up state.
+            with self._lock:
+                if tenant_id in self._tenants and self._tenants[tenant_id].get(role):
+                    self._tenants[tenant_id][role]["warmup_error"] = str(e)
 
 
 
