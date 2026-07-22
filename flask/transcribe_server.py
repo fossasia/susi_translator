@@ -288,6 +288,13 @@ TTS_VOICES = [
 TTS_VOICE_IDS = frozenset(voice["id"] for voice in TTS_VOICES if voice["id"] != "auto")
 
 
+def validate_tts_voice(requested_voice):
+    """Reject unknown explicit voice IDs; leave auto unresolved."""
+    if requested_voice and requested_voice != "auto" and requested_voice not in TTS_VOICE_IDS:
+        raise ValueError(f"Unknown TTS voice {requested_voice!r}.")
+    return requested_voice or "auto"
+
+
 def resolve_tts_voice(target_lang, requested_voice=None):
     if not requested_voice or requested_voice == "auto":
         return TTS_VOICE_STYLES.get(target_lang, "F1")
@@ -1204,7 +1211,7 @@ def configure_provider():
 
 
 def _stream_caption_events(
-    tenant_id, target_lang, last_chunk_id, wants_audio=False, voice_name=None
+    tenant_id, target_lang, last_chunk_id, wants_audio=False, requested_voice="auto"
 ):
     """
     Shared generator for transcripts, translations, and yielding events
@@ -1271,23 +1278,23 @@ def _stream_caption_events(
                         tts_text = tts_text[:297] + "..."
                     
                     lang_to_speak = target_lang if target_lang else registry.get_language_config(tenant_id).get('source_lang', 'en')
-                    cache_key = (lang_to_speak, voice_name, tts_text)
+                    cache_key = (lang_to_speak, requested_voice, tts_text)
                     cached_audio = tts_cache.get(cache_key)
                     
                     if cached_audio in ('pending', 'failed'):
                         pass
                     elif cached_audio is not None:
                         audio_b64 = cached_audio
-                        if sent_audio.get(cid) != (tts_text, voice_name):
+                        if sent_audio.get(cid) != (tts_text, requested_voice):
                             needs_audio_update = True
                     else:
-                        latest_tts_requests[(tenant_id, cid, voice_name)] = tts_text
+                        latest_tts_requests[(tenant_id, cid, requested_voice)] = tts_text
                         tts_cache[cache_key] = 'pending'
                         tts_executor.submit(
                             _async_generate_tts,
                             tts_text,
                             lang_to_speak,
-                            voice_name,
+                            requested_voice,
                             cache_key,
                             cid,
                             tenant_id,
@@ -1302,7 +1309,7 @@ def _stream_caption_events(
                     
                     if needs_audio_update and audio_b64:
                         payload["audio_b64"] = audio_b64
-                        sent_audio[cid] = (tts_text, voice_name)
+                        sent_audio[cid] = (tts_text, requested_voice)
 
                     events_to_send.append(payload)
                     sent_transcripts[cid] = text
@@ -1332,7 +1339,7 @@ def translate_stream():
     wants_audio = request.args.get('audio', 'false').lower() == 'true'
     requested_voice = request.args.get('voice', 'auto')
     try:
-        voice_name = resolve_tts_voice(target_lang, requested_voice)
+        validate_tts_voice(requested_voice)
     except ValueError as exc:
         return jsonify({"status": "error", "message": str(exc)}), 400
 
@@ -1352,7 +1359,7 @@ def translate_stream():
                 target_lang,
                 last_chunk_id,
                 wants_audio,
-                voice_name,
+                requested_voice,
             ):
                 for payload in events_to_send:
                     yield f"data: {json.dumps(payload)}\n\n"
@@ -1455,7 +1462,7 @@ def _translate_stream_ws_handler(ws):
         wants_audio = request.args.get('audio', 'false').lower() == 'true'
         requested_voice = request.args.get('voice', 'auto')
         try:
-            voice_name = resolve_tts_voice(target_lang, requested_voice)
+            validate_tts_voice(requested_voice)
         except ValueError as exc:
             try:
                 ws.send(json.dumps({"status": "error", "message": str(exc)}))
@@ -1479,7 +1486,7 @@ def _translate_stream_ws_handler(ws):
                 target_lang,
                 last_chunk_id,
                 wants_audio,
-                voice_name,
+                requested_voice,
             ):
                 for payload in events_to_send:
                     ws.send(json.dumps(payload))

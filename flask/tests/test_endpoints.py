@@ -253,6 +253,21 @@ def test_generate_tts_sync_uses_selected_voice(mock_get_engine):
     mock_engine.get_voice_style.assert_called_once_with(voice_name="F4")
 
 
+@patch("transcribe_server.get_tts_engine")
+def test_generate_tts_sync_auto_uses_source_lang_voice(mock_get_engine):
+    import numpy as np
+
+    mock_engine = MagicMock()
+    mock_engine.synthesize.return_value = (np.zeros((1, 10)), 1.0)
+    mock_engine.sample_rate = 44100
+    mock_get_engine.return_value = mock_engine
+
+    from transcribe_server import generate_tts_sync
+
+    assert generate_tts_sync("hallo", "de", "auto") is not None
+    mock_engine.get_voice_style.assert_called_once_with(voice_name="M2")
+
+
 @patch("transcribe_server._assert_tenant_ownership", return_value=None)
 @patch("auth.decorators.verify_jwt_in_request", return_value=None)
 @patch("auth.decorators.get_jwt", return_value={})
@@ -283,6 +298,39 @@ def test_stream_audio_background_dispatch(mock_translate, mock_executor, mock_jw
     assert args[3] == "M3"
     assert args[4] == ("es", "M3", "hola")
     assert b'"tts_voices"' in lines[0]
+
+
+@patch("transcribe_server._assert_tenant_ownership", return_value=None)
+@patch("auth.decorators.verify_jwt_in_request", return_value=None)
+@patch("auth.decorators.get_jwt", return_value={})
+@patch("transcribe_server.tts_executor")
+def test_stream_original_auto_defers_voice_resolution(
+    mock_executor, mock_jwt, mock_verify, mock_assert, client, ts
+):
+    with patch.object(
+        ts.registry, "get_language_config", return_value={"source_lang": "de"}
+    ):
+        with ts.transcripts_lock:
+            ts.transcriptd["t1"] = {"0": {"transcript": "hallo"}}
+
+        resp = client.get(
+            "/api/v1/translate/stream"
+            "?tenant_id=t1&audio=true&target_lang=original&voice=auto"
+        )
+
+        iterator = iter(resp.response)
+        for _ in range(2):
+            try:
+                next(iterator)
+            except StopIteration:
+                break
+
+    assert mock_executor.submit.called
+    args, _ = mock_executor.submit.call_args
+    assert args[1] == "hallo"
+    assert args[2] == "de"
+    assert args[3] == "auto"
+    assert args[4] == ("de", "auto", "hallo")
 
 
 @patch("transcribe_server._assert_tenant_ownership", return_value=None)
