@@ -2098,27 +2098,12 @@ def stream_page(tenant_id: str):
     return render_template("stream.html", tenant_id=tenant_id, video_url=video_url, stream_type=stream_type, audio_file_url=audio_file_url, translations_enabled=translations_enabled)
 
 
-# Eagerly load the default models when the server starts
-def _eager_load_models():
-    logger.info("Eagerly loading default machine learning models...")
-    try:
-        from providers.registry import _get_or_create_shared_model, _DEFAULT_TRANSCRIPTION_FALLBACK, _DEFAULT_TRANSLATION_FALLBACK
-        t_fallback = _DEFAULT_TRANSCRIPTION_FALLBACK["provider_name"]
-        _get_or_create_shared_model(t_fallback, _DEFAULT_TRANSCRIPTION_FALLBACK["config"]).load_model()
-        logger.info(f"Successfully eager-loaded transcription model: '{t_fallback}'")
-        
-        tx_fallback = _DEFAULT_TRANSLATION_FALLBACK["provider_name"]
-        _get_or_create_shared_model(tx_fallback, _DEFAULT_TRANSLATION_FALLBACK["config"]).load_model()
-        logger.info(f"Successfully eager-loaded translation model: '{tx_fallback}'")
-        
-        # Load Supertonic TTS
-        get_tts_engine()
-        logger.info("Successfully eager-loaded Supertonic TTS engine")
-    except Exception as e:
-        logger.error(f"Failed to eagerly load models: {e}")
 
 if _env_bool('TRANSCRIBE_AUTOSTART_WORKER', True):
-    _eager_load_models()
+    logger.info(
+        "[Startup] Hot-tier model warmup delegated to ProviderRegistry background threads. "
+        "Check logs for 'warmup-hottier-*' thread status."
+    )
 
 
 if __name__ == '__main__':

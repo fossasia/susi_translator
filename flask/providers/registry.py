@@ -6,6 +6,7 @@ providers side-by-side using an isolated role-based slot pipeline.
 from __future__ import annotations
 
 import logging
+import os
 import threading
 import time
 from typing import Any, Callable, Dict, List, Optional
@@ -21,9 +22,57 @@ from .base import (
 
 logger = logging.getLogger(__name__)
 
-# Unified registry of provider factories. Each factory is a callable that takes a config dict
-# and returns a concrete subclass of BaseProvider
-_PROVIDER_FACTORIES: Dict[str, Callable[[Dict[str, Any]], BaseProvider]] = {}
+# Unified registry of provider factories.
+# Each entry stores the factory callable AND memory metadata declared by the plugin author.
+_PROVIDER_FACTORIES: Dict[str, Dict[str, Any]] = {}
+
+MODEL_MEMORY_MB: Dict[str, int] = {}
+
+# Placeholder budgets; to be tuned with real VRAM usage data
+MAX_IDLE_MEMORY_MB = 5000
+MAX_HOT_TIER_MB = 5000
+
+HOT_TIER_MODELS = [
+    {"provider_name": "faster_whisper", "config": {"model_size": "medium"}},
+    {"provider_name": "nllb_ctranslate2", "config": {}}
+]
+
+
+def _estimate_model_size(provider_name: str, config: Dict[str, Any]) -> int:
+    """
+    Look up the estimated memory footprint of a model using metadata registered
+    by the plugin author
+    """
+    meta = _PROVIDER_FACTORIES.get(provider_name, {})
+    config_key = meta.get("config_memory_key")  # e.g. "model_size", "model_id"
+    memory_map = meta.get("memory_mb_map", {})  
+
+    lookup_key = None
+    if config_key and memory_map:
+        raw_val = config.get(config_key)
+        if raw_val is not None:
+            # Normalize: strip leading path segments (e.g. "facebook/nllb-200-distilled-600M" -> "nllb-200-distilled-600M")
+            short_val = str(raw_val).split("/")[-1]
+            lookup_key = memory_map.get(short_val) or memory_map.get(raw_val)
+        if lookup_key is None:
+            # Fall back to the map's "default" key if the plugin declared one
+            lookup_key = memory_map.get("default")
+
+    if lookup_key is not None:
+        return lookup_key
+
+    # Global MODEL_MEMORY_MB table (coarse-grained, for external/legacy plugins)
+    coarse_key = provider_name
+    result = MODEL_MEMORY_MB.get(coarse_key)
+    if result is not None:
+        return result
+
+    logger.warning(
+        f"[Registry] No memory estimate registered for '{provider_name}' "
+        f"(config_key={config_key!r}, config={config}). "
+        "Using conservative fallback of 1000 MB"
+    )
+    return 1000
 
 # Fallback used when a tenant skips configuration entirely
 _DEFAULT_TRANSCRIPTION_FALLBACK: Dict[str, Any] = {
@@ -40,13 +89,19 @@ _DEFAULT_TRANSLATION_FALLBACK: Dict[str, Any] = {
 
 
 def register_provider(
-    name: str, 
-    factory: Callable[[Dict[str, Any]], BaseProvider]
+    name: str,
+    factory: Callable[[Dict[str, Any]], BaseProvider],
+    memory_mb_map: Optional[Dict[str, int]] = None,
+    config_memory_key: Optional[str] = None,
 ) -> None:
     """
-    Register a provider factory under a canonical name.
+    Register a provider factory under a canonical name
     """
-    _PROVIDER_FACTORIES[name] = factory
+    _PROVIDER_FACTORIES[name] = {
+        "factory": factory,
+        "memory_mb_map": memory_mb_map or {},
+        "config_memory_key": config_memory_key,
+    }
     logger.debug(f"Registered plugin provider factory: {name}")
 
 
@@ -60,6 +115,7 @@ class SharedModelRef:
         self.instance = instance
         self.refs = 0
         self.last_used = time.time()
+        self.is_hot_tier = False
 
 _shared_models: Dict[tuple, SharedModelRef] = {}
 _shared_models_lock = threading.Lock()
@@ -89,11 +145,12 @@ def _get_or_create_shared_model(provider_name: str, config: Dict[str, Any]) -> B
             ref.last_used = time.time()
             return ref.instance
 
-        factory = _PROVIDER_FACTORIES.get(provider_name)
-        if factory is None:
+        meta = _PROVIDER_FACTORIES.get(provider_name)
+        if meta is None:
             raise ProviderConfigError(
                 f"Unknown provider '{provider_name}'. Available: {available_providers()}"
             )
+        factory = meta["factory"]
         try:
             instance = factory(config)
         except Exception as e:
@@ -131,11 +188,56 @@ class ProviderRegistry:
         self._tenants: Dict[str, Dict[str, Any]] = {}
         self._lock = threading.Lock()
         
+        # Initialize Hot Tier Models unless we are in a testing environment
+        if os.environ.get("FLASK_TESTING") != "true":
+            hot_tier_size = 0
+            for hot_model in HOT_TIER_MODELS:
+                p_name = hot_model["provider_name"]
+                p_config = hot_model.get("config", {})
+                size = _estimate_model_size(p_name, p_config)
+                hot_tier_size += size
+                
+            if hot_tier_size > MAX_HOT_TIER_MB:
+                raise ValueError(f"[Registry] Hot Tier exceeds budget ({hot_tier_size} MB > {MAX_HOT_TIER_MB} MB). Refusing to start to prevent OOM.")
+                
+            for hot_model in HOT_TIER_MODELS:
+                p_name = hot_model["provider_name"]
+                p_config = hot_model.get("config", {})
+                cache_key = _make_cache_key(p_name, p_config)
+                
+                ref = _shared_models.get(cache_key)
+                if not ref:
+                    # Eagerly create the ref
+                    with _shared_models_lock:
+                        if cache_key not in _shared_models:
+                            _shared_models[cache_key] = SharedModelRef(instance=None)
+                        ref = _shared_models[cache_key]
+                
+                ref.is_hot_tier = True
+                
+                # Start a daemon thread to load the hot model
+                threading.Thread(
+                    target=self._warmup_hot_tier,
+                    args=(p_name, p_config),
+                    name=f"warmup-hottier-{p_name}",
+                    daemon=True
+                ).start()
+        
         threading.Thread(
             target=self._eviction_loop,
             name="registry-eviction-loop",
             daemon=True
         ).start()
+
+    def _warmup_hot_tier(self, provider_name: str, config: Dict[str, Any]) -> None:
+        try:
+            provider = _get_or_create_shared_model(provider_name, config)
+            size = _estimate_model_size(provider_name, config)
+            logger.info(f"[Registry] Hot Tier Loading '{provider_name}' (Est {size}MB) into memory...")
+            provider.load_model()
+            logger.info(f"[Registry] Hot Tier Warmup complete for '{provider_name}'")
+        except Exception as e:
+            logger.error(f"[Registry] Hot Tier Warmup failed for '{provider_name}': {e}")
 
     def _increment_ref(self, cache_key: tuple) -> None:
         with _shared_models_lock:
@@ -153,22 +255,56 @@ class ProviderRegistry:
                 
     def _eviction_loop(self) -> None:
         while True:
-            time.sleep(60)  # Check every minute
+            time.sleep(15)  # Check every 15 seconds
             now = time.time()
+            models_to_unload = []
+            
             with _shared_models_lock:
-                keys_to_evict = []
-                for cache_key, ref in _shared_models.items():
-                    if ref.refs == 0 and (now - ref.last_used) > 3600:
-                        keys_to_evict.append(cache_key)
+                total_idle_mb = 0
+                idle_models = []
                 
+                # Calculate idle memory & Handle TTL
+                keys_to_evict = []
+                for cache_key, ref in list(_shared_models.items()):
+                    if ref.refs > 0 or ref.is_hot_tier:
+                        continue
+                        
+                    idle_time = now - ref.last_used
+                    if idle_time <= 60:
+                        continue  # Grace period immunity
+                        
+                    if idle_time > 3600:
+                        keys_to_evict.append(cache_key)
+                        continue
+                        
+                    size = _estimate_model_size(cache_key[0], dict(cache_key[1]))
+                    total_idle_mb += size
+                    idle_models.append((cache_key, ref, size))
+                
+                # Handle Memory Budgets
+                if total_idle_mb > MAX_IDLE_MEMORY_MB:
+                    # Sort oldest first
+                    idle_models.sort(key=lambda item: item[1].last_used)
+                    for cache_key, ref, size in idle_models:
+                        keys_to_evict.append(cache_key)
+                        total_idle_mb -= size
+                        if total_idle_mb <= MAX_IDLE_MEMORY_MB:
+                            break
+                            
+                # Pop evicted models from cache safely inside lock
                 for key in keys_to_evict:
-                    ref = _shared_models.pop(key)
-                    if ref.instance is not None:
-                        logger.info(f"[Registry] Evicting unused model {key[0]} from memory.")
-                        try:
-                            ref.instance.unload_model()
-                        except Exception as e:
-                            logger.error(f"[Registry] Error unloading model {key[0]}: {e}")
+                    ref = _shared_models.pop(key, None)
+                    if ref and ref.instance is not None:
+                        models_to_unload.append((key, ref.instance))
+                        
+            # Perform unload_model outside the lock to avoid blocking other threads
+            for key, instance in models_to_unload:
+                size = _estimate_model_size(key[0], dict(key[1]))
+                logger.info(f"[Registry] Evicting unused model {key[0]} (Est {size}MB) from memory.")
+                try:
+                    instance.unload_model()
+                except Exception as e:
+                    logger.error(f"[Registry] Error unloading model {key[0]}: {e}")
 
     def configure(
         self,
@@ -396,6 +532,9 @@ class ProviderRegistry:
             provider = self._resolve_instance(tenant_id, role)
             if provider is None:
                 return
+            
+            size = _estimate_model_size(provider.provider_name, provider.config)
+            logger.info(f"[Registry] Warmup Loading '{provider.provider_name}' (Est {size}MB) into memory...")
             # Trigger the actual model load by calling load_model directly
             provider.load_model()
 

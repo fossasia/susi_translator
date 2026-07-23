@@ -24,6 +24,7 @@ os.environ["DATABASE_URL"] = "sqlite:///:memory:"
 # (double-submit cookie pattern) that test clients do not implement.
 # Without this, every POST via the test client is rejected with 401 CSRFError.
 os.environ["JWT_COOKIE_CSRF_PROTECT"] = "false"
+os.environ["FLASK_TESTING"] = "true"
 
 
 @pytest.fixture
