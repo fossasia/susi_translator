@@ -14,7 +14,7 @@ register_provider(
         "medium": 3000,
         "large-v2": 6000,
         "large-v3": 6000,
-        "default": 3000,  # same as medium (the system default)
+        "default": 3000,  # same as medium
     },
     config_memory_key="model_size",
 )

@@ -9,6 +9,7 @@ import logging
 import os
 import threading
 import time
+import json
 from typing import Any, Callable, Dict, List, Optional
 
 from .base import (
@@ -32,10 +33,20 @@ MODEL_MEMORY_MB: Dict[str, int] = {}
 MAX_IDLE_MEMORY_MB = 5000
 MAX_HOT_TIER_MB = 5000
 
-HOT_TIER_MODELS = [
+# Parse hot tier models from environment variable, falling back to defaults
+_default_hot_tier = [
     {"provider_name": "faster_whisper", "config": {"model_size": "medium"}},
     {"provider_name": "nllb_ctranslate2", "config": {}}
 ]
+try:
+    _env_hot_tier = os.getenv("HOT_TIER_MODELS")
+    if _env_hot_tier:
+        HOT_TIER_MODELS = json.loads(_env_hot_tier)
+    else:
+        HOT_TIER_MODELS = _default_hot_tier
+except Exception as e:
+    logger.error(f"[Registry] Failed to parse HOT_TIER_MODELS from environment, using defaults. Error: {e}")
+    HOT_TIER_MODELS = _default_hot_tier
 
 
 def _estimate_model_size(provider_name: str, config: Dict[str, Any]) -> int:
@@ -260,6 +271,17 @@ class ProviderRegistry:
             models_to_unload = []
             
             with _shared_models_lock:
+                # Debug logging of current models
+                active_summary = []
+                for cache_key, ref in _shared_models.items():
+                    provider_name = cache_key[0]
+                    state = "loading" if ref.instance is None else "ready"
+                    tier = "HOT" if ref.is_hot_tier else "NORMAL"
+                    active_summary.append(f"{provider_name} ({tier}, {state}, refs: {ref.refs})")
+                
+                if active_summary:
+                    logger.debug(f"[Registry] Memory State: {', '.join(active_summary)}")
+                
                 total_idle_mb = 0
                 idle_models = []
                 
