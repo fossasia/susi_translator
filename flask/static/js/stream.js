@@ -151,6 +151,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Audio State
     let playAudio = false;
+    let selectedVoice = localStorage.getItem(`susi_voice_${TENANT_ID}`) || 'auto';
     let audioQueue = [];
     let isPlaying = false;
     let currentAudio = null;
@@ -172,6 +173,9 @@ document.addEventListener('DOMContentLoaded', () => {
         let qs = `tenant_id=${TENANT_ID}&source=${encodeURIComponent(STREAM_TYPE)}&last_chunk_id=${lastChunkId}&audio=${playAudio}`;
         if (!targetLang) targetLang = 'original';
         qs += `&target_lang=${encodeURIComponent(targetLang)}`;
+        if (playAudio) {
+            qs += `&voice=${encodeURIComponent(selectedVoice)}`;
+        }
         return qs;
     }
 
@@ -181,6 +185,9 @@ document.addEventListener('DOMContentLoaded', () => {
             url += `&target_lang=${encodeURIComponent(targetLang)}`;
         } else {
             url += `&target_lang=original`;
+        }
+        if (playAudio) {
+            url += `&voice=${encodeURIComponent(selectedVoice)}`;
         }
         return url;
     }
@@ -196,7 +203,12 @@ document.addEventListener('DOMContentLoaded', () => {
         const systemMsg = document.querySelector('.system-msg');
         if (systemMsg) systemMsg.remove();
 
-        if (data.status === 'connected') return;
+        if (data.status === 'connected') {
+            if (Array.isArray(data.tts_voices)) {
+                syncVoiceMenu(data.tts_voices);
+            }
+            return;
+        }
 
         if (data.status === 'error') {
             statusText.innerText = 'Stream Error';
@@ -493,30 +505,119 @@ document.addEventListener('DOMContentLoaded', () => {
         URL.revokeObjectURL(url);
     });
 
-    // Audio Toggle Switch
-    const audioToggleCheckbox = document.getElementById('audio-toggle-checkbox');
-    const audioToggleLabel = document.getElementById('audio-toggle-label');
+    // TTS split button: mute/active toggle + voice dropdown
+    const ttsSplitBtn = document.getElementById('tts-split-btn');
+    const ttsToggleBtn = document.getElementById('tts-toggle-btn');
+    const ttsToggleLabel = document.getElementById('tts-toggle-label');
+    const ttsVoiceMenuBtn = document.getElementById('tts-voice-menu-btn');
+    const ttsVoiceMenu = document.getElementById('tts-voice-menu');
 
-    if (audioToggleCheckbox && audioToggleLabel) {
-        audioToggleCheckbox.addEventListener('change', (e) => {
-            playAudio = e.target.checked;
-            if (playAudio) {
-                audioToggleLabel.innerText = 'TTS Active';
-                audioToggleLabel.style.color = '#16a34a'; // green
+    function voiceLabelFor(id) {
+        const option = ttsVoiceMenu?.querySelector(`[data-voice-id="${CSS.escape(id)}"]`);
+        return option ? option.textContent.trim() : id;
+    }
+
+    function updateVoiceSelectionUi() {
+        if (!ttsVoiceMenu) return;
+        ttsVoiceMenu.querySelectorAll('.tts-voice-option').forEach((btn) => {
+            btn.classList.toggle('is-selected', btn.dataset.voiceId === selectedVoice);
+            btn.setAttribute('aria-selected', btn.dataset.voiceId === selectedVoice ? 'true' : 'false');
+        });
+        if (ttsVoiceMenuBtn) {
+            ttsVoiceMenuBtn.title = `Voice: ${voiceLabelFor(selectedVoice)}`;
+        }
+    }
+
+    function syncVoiceMenu(voices) {
+        if (!ttsVoiceMenu || !Array.isArray(voices) || voices.length === 0) return;
+        const known = new Set(
+            Array.from(ttsVoiceMenu.querySelectorAll('.tts-voice-option')).map((el) => el.dataset.voiceId)
+        );
+        const idsMatch = voices.length === known.size
+            && voices.every((v) => known.has(v.id));
+        if (idsMatch) return;
+
+        ttsVoiceMenu.innerHTML = '';
+        voices.forEach((voice) => {
+            const li = document.createElement('li');
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'tts-voice-option';
+            btn.role = 'option';
+            btn.dataset.voiceId = voice.id;
+            btn.textContent = voice.label || voice.id;
+            li.appendChild(btn);
+            ttsVoiceMenu.appendChild(li);
+        });
+        updateVoiceSelectionUi();
+    }
+
+    function setTtsMenuOpen(open) {
+        if (!ttsVoiceMenu || !ttsVoiceMenuBtn) return;
+        ttsVoiceMenu.hidden = !open;
+        ttsVoiceMenuBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
+    }
+
+    function setTtsActive(active) {
+        playAudio = active;
+        if (ttsSplitBtn) ttsSplitBtn.classList.toggle('is-active', active);
+        if (ttsToggleBtn) ttsToggleBtn.setAttribute('aria-pressed', active ? 'true' : 'false');
+        if (ttsToggleLabel) {
+            ttsToggleLabel.innerText = active ? 'TTS Active' : 'TTS Muted';
+        }
+    }
+
+    if (ttsToggleBtn && ttsToggleLabel) {
+        setTtsActive(false);
+        updateVoiceSelectionUi();
+
+        ttsToggleBtn.addEventListener('click', () => {
+            const nextActive = !playAudio;
+            setTtsActive(nextActive);
+            if (nextActive) {
                 if (waveSurferInstance) waveSurferInstance.setVolume(0);
             } else {
-                audioToggleLabel.innerText = 'TTS Muted';
-                audioToggleLabel.style.color = '#5a6a8a';
                 if (waveSurferInstance) waveSurferInstance.setVolume(1);
-                stopAndClearAudio(); // Clear queue on mute
-                
-                // Unhide any blocks that were waiting for audio
-                document.querySelectorAll('.caption-block').forEach(b => {
+                stopAndClearAudio();
+                document.querySelectorAll('.caption-block').forEach((b) => {
                     b.style.display = '';
                 });
                 captionsBox.scrollTop = captionsBox.scrollHeight;
             }
-            connect(); // reconnect to inform backend to start/stop generating audio
+            connect();
+        });
+    }
+
+    if (ttsVoiceMenuBtn && ttsVoiceMenu) {
+        ttsVoiceMenu.addEventListener('click', (e) => {
+            const btn = e.target.closest('.tts-voice-option');
+            if (!btn) return;
+            const nextVoice = btn.dataset.voiceId || 'auto';
+            if (nextVoice === selectedVoice) {
+                setTtsMenuOpen(false);
+                return;
+            }
+            selectedVoice = nextVoice;
+            localStorage.setItem(`susi_voice_${TENANT_ID}`, selectedVoice);
+            updateVoiceSelectionUi();
+            setTtsMenuOpen(false);
+            stopAndClearAudio();
+            connect();
+        });
+
+        ttsVoiceMenuBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            setTtsMenuOpen(ttsVoiceMenu.hidden);
+        });
+
+        document.addEventListener('click', (e) => {
+            if (!ttsSplitBtn?.contains(e.target)) {
+                setTtsMenuOpen(false);
+            }
+        });
+
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') setTtsMenuOpen(false);
         });
     }
 });

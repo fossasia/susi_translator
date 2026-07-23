@@ -124,7 +124,7 @@ main:has(.stream-page) {
     background-color: #ffffff;
     border: 1.5px solid #d8e3f5;
     border-radius: 12px;
-    overflow: hidden;
+    overflow: visible; /* ponytail: header dropdown must escape; scroll lives on .captions-box */
     display: flex;
     flex-direction: column;
     box-shadow: 0 12px 32px rgba(79,142,247,0.08);
@@ -139,6 +139,10 @@ main:has(.stream-page) {
     background-color: #f8faff;
     border-bottom: 1.5px solid #d8e3f5;
     gap: 12px;
+    position: relative;
+    z-index: 5;
+    overflow: visible;
+    border-radius: 12px 12px 0 0;
 }
 
 .captions-header h3 {
@@ -209,7 +213,138 @@ main:has(.stream-page) {
     color: #4f8ef7;
 }
 
-/* Toggle Switch Styles */
+/* TTS split button: mute/active + voice dropdown */
+.tts-split-btn {
+    position: relative;
+    display: inline-flex;
+    align-items: stretch;
+    background: #ffffff;
+    border: 1.5px solid #d8e3f5;
+    border-radius: 8px;
+    box-shadow: 0 1px 2px rgba(79, 142, 247, 0.06);
+}
+
+.tts-split-btn.is-active {
+    border-color: #86efac;
+    box-shadow: 0 0 0 3px rgba(22, 163, 74, 0.12);
+}
+
+.tts-split-btn__main {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+    border: none;
+    border-right: 1.5px solid #d8e3f5;
+    background: transparent;
+    color: #5a6a8a;
+    font-family: 'Inter', Arial, sans-serif;
+    font-size: 0.85rem;
+    font-weight: 600;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: color 0.15s, background-color 0.15s;
+}
+
+.tts-split-btn.is-active .tts-split-btn__main {
+    color: #16a34a;
+}
+
+.tts-split-btn__main:hover {
+    background: #f8faff;
+}
+
+.tts-split-btn__caret {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 34px;
+    padding: 0;
+    border: none;
+    background: transparent;
+    color: #5a6a8a;
+    cursor: pointer;
+    transition: background-color 0.15s, color 0.15s;
+}
+
+.tts-split-btn__caret:hover,
+.tts-split-btn__caret[aria-expanded="true"] {
+    background: #f0f5ff;
+    color: #4f8ef7;
+}
+
+.tts-split-btn__caret-icon {
+    display: block;
+    width: 0;
+    height: 0;
+    border-left: 5px solid transparent;
+    border-right: 5px solid transparent;
+    border-top: 6px solid currentColor;
+    transition: transform 0.15s;
+}
+
+.tts-split-btn__caret[aria-expanded="true"] .tts-split-btn__caret-icon {
+    transform: rotate(180deg);
+}
+
+.tts-voice-menu {
+    position: absolute;
+    top: calc(100% + 6px);
+    left: 0;
+    right: auto;
+    z-index: 100;
+    min-width: 168px;
+    max-height: 280px;
+    overflow-y: auto;
+    margin: 0;
+    padding: 6px;
+    list-style: none;
+    background: #ffffff;
+    border: 1.5px solid #d8e3f5;
+    border-radius: 10px;
+    box-shadow: 0 12px 28px rgba(26, 35, 64, 0.12);
+}
+
+.tts-voice-menu li {
+    margin: 0;
+    padding: 0;
+}
+
+.tts-voice-option {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+    padding: 8px 10px;
+    border: none;
+    border-radius: 6px;
+    background: transparent;
+    color: #1a2340;
+    font-family: 'Inter', Arial, sans-serif;
+    font-size: 0.85rem;
+    font-weight: 500;
+    text-align: left;
+    cursor: pointer;
+    transition: background-color 0.12s;
+}
+
+.tts-voice-option:hover {
+    background: #f0f5ff;
+}
+
+.tts-voice-option.is-selected {
+    background: #e8f0fe;
+    color: #1d4ed8;
+    font-weight: 600;
+}
+
+.tts-voice-option.is-selected::after {
+    content: "✓";
+    font-size: 0.8rem;
+    color: #16a34a;
+}
+
+/* Legacy toggle — removed from stream page; keep rules harmless if reused elsewhere */
 .audio-toggle-wrapper {
     display: flex;
     align-items: center;
@@ -285,6 +420,8 @@ input:checked + .slider:before {
     flex: 1;
     min-height: 0;
     overflow-y: auto;
+    overflow-x: hidden;
+    border-radius: 0 0 12px 12px;
     font-family: 'Inter', Arial, sans-serif;
     font-size: 1.05rem;
     line-height: 1.6;

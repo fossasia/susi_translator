@@ -3,7 +3,7 @@
 {% block title %}SUSI Translator - Live Stream{% endblock %}
 
 {% block head %}
-<link rel="stylesheet" href="{{ url_for('static', filename='css/stream.css') }}?v=11" />
+<link rel="stylesheet" href="{{ url_for('static', filename='css/stream.css') }}?v=15" />
 <script src="https://unpkg.com/wavesurfer.js@7/dist/wavesurfer.min.js"></script>
 <style>
   /* Inline fallback: zero out main padding directly so layout is locked */
@@ -76,12 +76,35 @@
                         </select>
                     </div>
                     {% endif %}
-                    <div class="audio-toggle-wrapper">
-                        <label class="switch">
-                            <input type="checkbox" id="audio-toggle-checkbox">
-                            <span class="slider round"></span>
-                        </label>
-                        <span id="audio-toggle-label">Muted</span>
+                    <div class="tts-split-btn" id="tts-split-btn">
+                        <button type="button" class="tts-split-btn__main" id="tts-toggle-btn" aria-pressed="false">
+                            <span id="tts-toggle-label">TTS Muted</span>
+                        </button>
+                        <button
+                            type="button"
+                            class="tts-split-btn__caret"
+                            id="tts-voice-menu-btn"
+                            aria-haspopup="listbox"
+                            aria-expanded="false"
+                            aria-label="Select TTS voice"
+                            title="Select voice"
+                        >
+                            <span class="tts-split-btn__caret-icon" aria-hidden="true"></span>
+                        </button>
+                        <ul class="tts-voice-menu" id="tts-voice-menu" role="listbox" hidden>
+                            {% for voice in tts_voices %}
+                            <li>
+                                <button
+                                    type="button"
+                                    class="tts-voice-option"
+                                    role="option"
+                                    data-voice-id="{{ voice.id }}"
+                                >
+                                    {{ voice.label }}
+                                </button>
+                            </li>
+                            {% endfor %}
+                        </ul>
                     </div>
                     <button id="download-btn" class="secondary-btn">Notes</button>
                 </div>
@@ -124,7 +147,7 @@
         history.replaceState(null, '', window.location.href);
     };
 </script>
-<script src="{{ url_for('static', filename='js/stream.js') }}?v=11"></script>
+<script src="{{ url_for('static', filename='js/stream.js') }}?v=15"></script>
 {% if stream_type == 'mic' %}
 <script src="{{ url_for('static', filename='js/web_mic.js') }}?v=6"></script>
 {% endif %}

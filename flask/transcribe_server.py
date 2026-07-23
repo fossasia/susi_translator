@@ -1943,7 +1943,15 @@ def stream_page(tenant_id: str):
         
     translations_enabled = registry.get_provider_name(tenant_id, role="translation") is not None
     
-    return render_template("stream.html", tenant_id=tenant_id, video_url=video_url, stream_type=stream_type, audio_file_url=audio_file_url, translations_enabled=translations_enabled)
+    return render_template(
+        "stream.html",
+        tenant_id=tenant_id,
+        video_url=video_url,
+        stream_type=stream_type,
+        audio_file_url=audio_file_url,
+        translations_enabled=translations_enabled,
+        tts_voices=TTS_VOICES,
+    )
 
 
 if __name__ == '__main__':
