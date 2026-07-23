@@ -1,8 +1,57 @@
 document.addEventListener('DOMContentLoaded', () => {
     let waveSurferInstance = null;
+    let embedPlatform = null;
+    let embedPlayer = null;
+    let sourceMutedForTts = false;
 
     //Embed the YouTube Video
     const ytPlayer = document.getElementById('yt-player');
+
+    function loadEmbedScript(src) {
+        return new Promise((resolve, reject) => {
+            const existing = document.querySelector(`script[src="${src}"]`);
+            if (existing) {
+                if (existing.dataset.loaded === '1') resolve();
+                else existing.addEventListener('load', () => resolve(), { once: true });
+                return;
+            }
+            const script = document.createElement('script');
+            script.src = src;
+            script.onload = () => {
+                script.dataset.loaded = '1';
+                resolve();
+            };
+            script.onerror = reject;
+            document.head.appendChild(script);
+        });
+    }
+
+    function sendYoutubeCommand(func) {
+        if (!ytPlayer?.contentWindow) return;
+        ytPlayer.contentWindow.postMessage(
+            JSON.stringify({ event: 'command', func, args: '' }),
+            'https://www.youtube.com'
+        );
+    }
+
+    function applySourceAudioMute(muted) {
+        sourceMutedForTts = muted;
+        if (waveSurferInstance) {
+            waveSurferInstance.setVolume(muted ? 0 : 1);
+        }
+        if (embedPlatform === 'youtube') {
+            sendYoutubeCommand(muted ? 'mute' : 'unMute');
+        }
+        if (embedPlatform === 'twitch' && embedPlayer?.setMuted) {
+            try {
+                embedPlayer.setMuted(muted);
+                if (!muted) embedPlayer.setVolume(1);
+            } catch (_) {}
+        }
+        if (embedPlatform === 'vimeo' && embedPlayer?.setVolume) {
+            embedPlayer.setVolume(muted ? 0 : 1).catch(() => {});
+        }
+    }
 
     const extractYtId = (url) => {
         const match = url.match(/(?:youtu\.be\/|youtube\.com\/(?:embed\/|v\/|watch\?v=|watch\?.+&v=))([^&?]+)/);
@@ -118,12 +167,39 @@ document.addEventListener('DOMContentLoaded', () => {
         const vimeoId = extractVimeoId(VIDEO_URL);
         
         if (ytId) {
-            ytPlayer.src = `https://www.youtube.com/embed/${ytId}?autoplay=1&mute=1`;
+            embedPlatform = 'youtube';
+            const origin = encodeURIComponent(window.location.origin);
+            ytPlayer.src = `https://www.youtube.com/embed/${ytId}?autoplay=1&mute=1&enablejsapi=1&origin=${origin}`;
+            ytPlayer.addEventListener('load', () => {
+                if (sourceMutedForTts) sendYoutubeCommand('mute');
+            });
         } else if (twitchId) {
+            embedPlatform = 'twitch';
+            ytPlayer.style.display = 'none';
+            const twitchHost = document.createElement('div');
+            twitchHost.id = 'twitch-embed';
+            ytPlayer.parentElement.appendChild(twitchHost);
             const currentHost = window.location.hostname;
-            ytPlayer.src = `https://player.twitch.tv/?channel=${twitchId}&parent=${currentHost}&autoplay=true&muted=true`;
+            loadEmbedScript('https://player.twitch.tv/js/embed/v1.js').then(() => {
+                embedPlayer = new Twitch.Player('twitch-embed', {
+                    width: '100%',
+                    height: '100%',
+                    channel: twitchId,
+                    parent: [currentHost],
+                    muted: true,
+                    autoplay: true,
+                });
+                embedPlayer.addEventListener(Twitch.Player.READY, () => {
+                    if (sourceMutedForTts) embedPlayer.setMuted(true);
+                });
+            }).catch((err) => console.warn('Twitch embed failed', err));
         } else if (vimeoId) {
+            embedPlatform = 'vimeo';
             ytPlayer.src = `https://player.vimeo.com/video/${vimeoId}?autoplay=1&muted=1`;
+            loadEmbedScript('https://player.vimeo.com/api/player.js').then(() => {
+                embedPlayer = new Vimeo.Player(ytPlayer);
+                if (sourceMutedForTts) embedPlayer.setVolume(0).catch(() => {});
+            }).catch((err) => console.warn('Vimeo embed failed', err));
         } else {
             console.info("Unrecognised URL — not a known streaming platform.");
             ytPlayer.style.display = 'none';
@@ -414,6 +490,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (isPlaying || audioQueue.length === 0) return;
 
         isPlaying = true;
+        if (playAudio) applySourceAudioMute(true);
         const nextItem = audioQueue.shift();
         currentAudioId = nextItem.id;
         
@@ -558,26 +635,24 @@ document.addEventListener('DOMContentLoaded', () => {
         ttsVoiceMenuBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
     }
 
-    function setTtsActive(active) {
+    function setTtsActive(active, { syncSourceAudio = true } = {}) {
         playAudio = active;
         if (ttsSplitBtn) ttsSplitBtn.classList.toggle('is-active', active);
         if (ttsToggleBtn) ttsToggleBtn.setAttribute('aria-pressed', active ? 'true' : 'false');
         if (ttsToggleLabel) {
             ttsToggleLabel.innerText = active ? 'TTS Active' : 'TTS Muted';
         }
+        if (syncSourceAudio) applySourceAudioMute(active);
     }
 
     if (ttsToggleBtn && ttsToggleLabel) {
-        setTtsActive(false);
+        setTtsActive(false, { syncSourceAudio: false });
         updateVoiceSelectionUi();
 
         ttsToggleBtn.addEventListener('click', () => {
             const nextActive = !playAudio;
             setTtsActive(nextActive);
-            if (nextActive) {
-                if (waveSurferInstance) waveSurferInstance.setVolume(0);
-            } else {
-                if (waveSurferInstance) waveSurferInstance.setVolume(1);
+            if (!nextActive) {
                 stopAndClearAudio();
                 document.querySelectorAll('.caption-block').forEach((b) => {
                     b.style.display = '';

@@ -3,7 +3,7 @@
 {% block title %}SUSI Translator - Live Stream{% endblock %}
 
 {% block head %}
-<link rel="stylesheet" href="{{ url_for('static', filename='css/stream.css') }}?v=15" />
+<link rel="stylesheet" href="{{ url_for('static', filename='css/stream.css') }}?v=17" />
 <script src="https://unpkg.com/wavesurfer.js@7/dist/wavesurfer.min.js"></script>
 <style>
   /* Inline fallback: zero out main padding directly so layout is locked */
@@ -147,7 +147,7 @@
         history.replaceState(null, '', window.location.href);
     };
 </script>
-<script src="{{ url_for('static', filename='js/stream.js') }}?v=15"></script>
+<script src="{{ url_for('static', filename='js/stream.js') }}?v=17"></script>
 {% if stream_type == 'mic' %}
 <script src="{{ url_for('static', filename='js/web_mic.js') }}?v=6"></script>
 {% endif %}
