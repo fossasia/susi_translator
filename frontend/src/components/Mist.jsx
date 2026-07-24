@@ -1,6 +1,6 @@
 import { motion } from "framer-motion";
 
-// Ambient Sarvam-style mist: soft, drifting blurred blue/cyan orbs on white.
+
 export const Mist = ({ className = "" }) => {
   const blobs = [
     {

@@ -1,4 +1,5 @@
 import { motion } from "framer-motion";
+import { Link } from "react-router-dom";
 import { Languages, Github, ArrowUpRight } from "lucide-react";
 import { Mist } from "../Mist";
 
@@ -27,14 +28,15 @@ export const Footer = () => (
             </span>
           </h2>
           <div className="mt-10 flex flex-wrap gap-4">
-            <motion.a
-              whileTap={{ scale: 0.96 }}
-              href="#demo"
-              className="inline-flex items-center gap-2 rounded-full bg-white px-7 py-4 text-base font-semibold text-slate-900 transition-transform hover:scale-[1.02]"
-              data-testid="footer-cta-primary"
-            >
-              Get started free
-            </motion.a>
+            <motion.div whileTap={{ scale: 0.96 }}>
+              <Link
+                to="/demo"
+                className="inline-flex items-center gap-2 rounded-full bg-white px-7 py-4 text-base font-semibold text-slate-900 transition-transform hover:scale-[1.02]"
+                data-testid="footer-cta-primary"
+              >
+                Get started free
+              </Link>
+            </motion.div>
             <motion.a
               whileTap={{ scale: 0.96 }}
               href="https://github.com/fossasia/susi_translator"
