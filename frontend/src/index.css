@@ -1,0 +1,128 @@
+@import url("https://api.fontshare.com/v2/css?f[]=cabinet-grotesk@400,500,700,800,900&f[]=satoshi@400,500,700&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&display=swap");
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+    --susi-blue: #0a52ff;
+    --susi-blue-soft: #60a5fa;
+    --susi-ink: #0f172a;
+    --susi-muted: #64748b;
+}
+
+* {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+}
+
+html.lenis,
+html.lenis body {
+    height: auto;
+}
+.lenis.lenis-smooth {
+    scroll-behavior: auto !important;
+}
+
+body {
+    margin: 0;
+    font-family: "Satoshi", ui-sans-serif, system-ui, sans-serif;
+    background-color: #ffffff;
+    color: var(--susi-ink);
+}
+
+code {
+    font-family: source-code-pro, Menlo, Monaco, Consolas, monospace;
+}
+
+@layer base {
+    :root {
+        --background: 0 0% 100%;
+        --foreground: 222 47% 11%;
+        --card: 0 0% 100%;
+        --card-foreground: 222 47% 11%;
+        --popover: 0 0% 100%;
+        --popover-foreground: 222 47% 11%;
+        --primary: 222 100% 52%;
+        --primary-foreground: 0 0% 100%;
+        --secondary: 210 40% 96%;
+        --secondary-foreground: 222 47% 11%;
+        --muted: 210 40% 96%;
+        --muted-foreground: 215 16% 47%;
+        --accent: 214 100% 97%;
+        --accent-foreground: 222 47% 11%;
+        --destructive: 0 84% 60%;
+        --destructive-foreground: 0 0% 98%;
+        --border: 214 32% 91%;
+        --input: 214 32% 91%;
+        --ring: 222 100% 52%;
+        --radius: 0.75rem;
+    }
+}
+
+@layer base {
+    * {
+        @apply border-border;
+    }
+    body {
+        @apply bg-background text-foreground;
+    }
+}
+
+@layer components {
+    .font-display {
+        font-family: "Cabinet Grotesk", ui-sans-serif, sans-serif;
+    }
+    .font-serif-editorial {
+        font-family: "Instrument Serif", ui-serif, Georgia, serif;
+    }
+    .text-stroke-ink {
+        color: transparent;
+        -webkit-text-stroke: 1.5px rgba(15, 23, 42, 0.85);
+    }
+    .text-stroke-blue {
+        color: transparent;
+        -webkit-text-stroke: 1.5px rgba(10, 82, 255, 0.55);
+    }
+    .glass {
+        background: rgba(255, 255, 255, 0.6);
+        backdrop-filter: blur(20px);
+        -webkit-backdrop-filter: blur(20px);
+        border: 1px solid rgba(255, 255, 255, 0.55);
+        box-shadow: 0 8px 32px rgba(10, 82, 255, 0.08);
+    }
+    .grain {
+        background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.04'/%3E%3C/svg%3E");
+    }
+}
+
+@keyframes marquee {
+    from {
+        transform: translateX(0);
+    }
+    to {
+        transform: translateX(-50%);
+    }
+}
+.animate-marquee {
+    animation: marquee 40s linear infinite;
+}
+
+::selection {
+    background: rgba(10, 82, 255, 0.85);
+    color: #ffffff;
+}
+
+/* Custom thin scrollbar */
+::-webkit-scrollbar {
+    width: 10px;
+}
+::-webkit-scrollbar-track {
+    background: #ffffff;
+}
+::-webkit-scrollbar-thumb {
+    background: #cbd5e1;
+    border-radius: 999px;
+    border: 3px solid #ffffff;
+}
