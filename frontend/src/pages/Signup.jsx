@@ -1,19 +1,45 @@
-import React from "react";
+import React, { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { motion } from "framer-motion";
 import { ArrowLeft, Github, Globe } from "lucide-react";
 import { Mist } from "@/components/Mist";
 import { useAuth } from "@/context/AuthContext";
 import { Button } from "@/components/ui/button";
+import { toast } from "sonner";
 
 const Signup = () => {
-  const { login } = useAuth();
+  const { signup } = useAuth();
   const navigate = useNavigate();
+  const [isLoading, setIsLoading] = useState(false);
 
-  const handleSignup = (e) => {
+  const handleSignup = async (e) => {
     e.preventDefault();
-    login();
-    navigate("/demo");
+    setIsLoading(true);
+
+    const formData = new FormData(e.currentTarget);
+    const firstName = formData.get("firstName");
+    const lastName = formData.get("lastName");
+    const email = formData.get("email");
+    const password = formData.get("password");
+
+    try {
+      const name = `${firstName} ${lastName}`.trim();
+      const data = await signup(name, email, password);
+      if (data.status === "success") {
+        toast.success("Account created successfully!");
+        navigate("/demo");
+      } else {
+        toast.error(data.message || "Failed to sign up");
+      }
+    } catch (error) {
+      toast.error(error.response?.data?.message || "An error occurred during signup.");
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleGithub = () => {
+    toast.info("GitHub signup coming soon!");
   };
 
   return (
@@ -60,7 +86,8 @@ const Signup = () => {
           <Button
             variant="outline"
             className="w-full justify-center gap-2 rounded-xl py-6 text-base font-semibold"
-            onClick={handleSignup}
+            onClick={handleGithub}
+            disabled={isLoading}
           >
             <Github className="h-5 w-5" /> Sign up with GitHub
           </Button>
@@ -76,9 +103,11 @@ const Signup = () => {
                 <input
                   type="text"
                   id="firstName"
+                  name="firstName"
                   required
                   className="w-full rounded-xl border border-slate-200 bg-white/50 px-4 py-3.5 text-slate-900 placeholder:text-slate-400 focus:border-[#0a52ff] focus:outline-none focus:ring-4 focus:ring-[#0a52ff]/10"
                   placeholder="First name"
+                  disabled={isLoading}
                 />
               </div>
               <div>
@@ -86,9 +115,11 @@ const Signup = () => {
                 <input
                   type="text"
                   id="lastName"
+                  name="lastName"
                   required
                   className="w-full rounded-xl border border-slate-200 bg-white/50 px-4 py-3.5 text-slate-900 placeholder:text-slate-400 focus:border-[#0a52ff] focus:outline-none focus:ring-4 focus:ring-[#0a52ff]/10"
                   placeholder="Last name"
+                  disabled={isLoading}
                 />
               </div>
             </div>
@@ -97,9 +128,11 @@ const Signup = () => {
               <input
                 type="email"
                 id="email"
+                name="email"
                 required
                 className="w-full rounded-xl border border-slate-200 bg-white/50 px-4 py-3.5 text-slate-900 placeholder:text-slate-400 focus:border-[#0a52ff] focus:outline-none focus:ring-4 focus:ring-[#0a52ff]/10"
                 placeholder="Email address"
+                disabled={isLoading}
               />
             </div>
             <div>
@@ -107,16 +140,19 @@ const Signup = () => {
               <input
                 type="password"
                 id="password"
+                name="password"
                 required
                 className="w-full rounded-xl border border-slate-200 bg-white/50 px-4 py-3.5 text-slate-900 placeholder:text-slate-400 focus:border-[#0a52ff] focus:outline-none focus:ring-4 focus:ring-[#0a52ff]/10"
                 placeholder="Create password"
+                disabled={isLoading}
               />
             </div>
             <Button
               type="submit"
-              className="mt-2 w-full rounded-xl bg-[#0a52ff] py-6 text-base font-semibold text-white shadow-[0_8px_20px_rgba(10,82,255,0.25)] transition-shadow hover:shadow-[0_12px_28px_rgba(10,82,255,0.35)]"
+              disabled={isLoading}
+              className="mt-2 w-full rounded-xl bg-[#0a52ff] py-6 text-base font-semibold text-white shadow-[0_8px_20px_rgba(10,82,255,0.25)] transition-shadow hover:shadow-[0_12px_28px_rgba(10,82,255,0.35)] disabled:opacity-70"
             >
-              Create account
+              {isLoading ? "Creating account..." : "Create account"}
             </Button>
           </form>
         </div>

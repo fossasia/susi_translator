@@ -14,7 +14,9 @@ import {
   Lock,
   Sparkles,
   Waves,
+  LogOut,
 } from "lucide-react";
+import { useAuth } from "@/context/AuthContext";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -65,6 +67,7 @@ const SEGMENTS = [
 ];
 
 export default function Playground() {
+  const { isAuthenticated, logout } = useAuth();
   const [tab, setTab] = useState("mic");
   const [sourceLang, setSourceLang] = useState("auto");
   const [sttModel] = useState("faster-whisper");
@@ -181,14 +184,24 @@ export default function Playground() {
             <Link to="/" className="hidden items-center gap-1.5 text-sm font-medium text-slate-600 hover:text-slate-900 sm:flex">
               <ArrowLeft className="h-4 w-4" /> Home
             </Link>
-            <Button
-              variant="outline"
-              className="rounded-full"
-              data-testid="pg-signin-btn"
-              onClick={() => toast("Sign-in connects to your SUSI backend, wiring pending.", { icon: "🔒" })}
-            >
-              <Lock className="h-4 w-4" /> Sign in
-            </Button>
+            {isAuthenticated ? (
+              <Button
+                variant="outline"
+                className="rounded-full text-red-600 hover:text-red-700 hover:bg-red-50"
+                onClick={logout}
+              >
+                <LogOut className="h-4 w-4" /> Log out
+              </Button>
+            ) : (
+              <Button
+                variant="outline"
+                className="rounded-full"
+                data-testid="pg-signin-btn"
+                onClick={() => toast("Sign-in connects to your SUSI backend, wiring pending.", { icon: "🔒" })}
+              >
+                <Lock className="h-4 w-4" /> Sign in
+              </Button>
+            )}
           </div>
         </div>
       </header>
