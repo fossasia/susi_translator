@@ -24,7 +24,8 @@ dependencies = [
     "mkdocs",
     "mkdocs-bootswatch",
     "numpy",
-    "openai-whisper",
+    "faster-whisper>=1.0.0",
+    "ctranslate2>=4.0.0",
     "pyaudio",
     "pybars3",
     "pydub",
@@ -40,6 +41,10 @@ dependencies = [
     "soundfile",
     "numba>=0.59.0",
     "flask-talisman>=1.1.0",
+   
+    "nvidia-cublas-cu12; sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "nvidia-cuda-runtime-cu12; sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "nvidia-cudnn-cu12; sys_platform == 'linux' and platform_machine == 'x86_64'",
 ]
 
 [tool.uv]

@@ -388,7 +388,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 console.info('[stream] WS dropped after connect (code', event.code, ') — reconnecting via SSE');
                 connectSSE();
             }
+
         };
+
     }
 
     //always tries WS first, SSE fallback is automatic

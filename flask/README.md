@@ -1,4 +1,4 @@
-## What the Flask App Is
+# Susi Translator Flask App
 
 A real-time speech-to-text (transcription) HTTP API built with Flask + flask-restx. It accepts streamed audio chunks, transcribes them via Whisper, and exposes REST endpoints for clients to poll/consume the resulting text.
 
@@ -6,24 +6,24 @@ A real-time speech-to-text (transcription) HTTP API built with Flask + flask-res
 
 ## High-Level Architecture
 
-```
-┌─────────────┐  POST /session   ┌──────────────────────────┐
-│ audio_      │ POST /transcripts│  transcribe_server.py    │
-│ grabber.py  │ ───────────────> │  (Flask + flask-restx)   │
-│ (mic/file/  │                  │                          │
-│  url/stdin  │                  │  ┌────────────────────┐  │
-│  /youtube)  │                  │  │ audio_stack queue  │  │
-└─────────────┘                  │  └─────────┬──────────┘  │
-                                 │            ▼             │
-                                 │  ┌────────────────────┐  │      Whisper
-                                 │  │ process_audio()    │──┼──▶  (local model
-                                 │  │ worker thread      │  │       OR whisper.cpp
-                                 │  └─────────┬──────────┘  │       HTTP server)
-                                 │            ▼             │
-                                 │  transcriptd (in-memory) │
-                                 │   tenant -> chunk -> txt │
-                                 └──────────────────────────┘
-                                              ▲
+```text
+┌─────────────┐  POST /session    ┌──────────────────────────────────────┐
+│ audio_      │  POST /transcribe │  transcribe_server.py                │
+│ grabber.py  │ ────────────────> │  (Flask + flask-restx)               │
+│ (mic/file/  │                   │                                      │
+│  url/stdin  │                   │  ┌────────────────────┐              │
+│  /youtube)  │                   │  │ audio_stack queue  │              │
+└─────────────┘                   │  └─────────┬──────────┘              │
+                                  │            ▼                         │
+                                  │  ┌────────────────────┐              │
+                                  │  │ process_audio()    │──> ProviderRegistry
+                                  │  │ worker thread      │       ↓            │
+                                  │  └─────────┬──────────┘  FasterWhisperLocal│
+                                  │            ▼             (CTranslate2)     │
+                                  │  transcriptd (in-memory) NLLBCTranslate2   │
+                                  │   tenant -> chunk -> txt (CTranslate2)     │
+                                  └──────────────────────────────────────┘
+                                               ▲
                   GET /transcripts, /transcripts/first, etc.
 ```
 
@@ -48,8 +48,8 @@ Grabs ~1s frames of 16 kHz / 16-bit / mono PCM from a mic, file, URL, stdin, or 
 **Sessions and source aliases.**
 Instead of forcing clients to track UUIDs, `POST /session?source=mic|file|url|stdin|youtube` mints a tenant UUID and registers it as "the latest session for that source." Read endpoints accept `?source=mic`, which resolves to that current tenant ID. Sessions expire after `SESSION_TTL_SECONDS` (default 7200s).
 
-**Pluggable Whisper backend.**
-`WHISPER_SERVER_USE=true` uses an external whisper.cpp HTTP server (no torch/whisper import — keeps the module light); otherwise it lazily imports torch + openai-whisper and loads two local models (`WHISPER_MODEL_FAST`, `WHISPER_MODEL_SMART`).
+**Pluggable provider architecture.**
+`POST /api/v1/translate/configure` selects per-tenant transcription and translation backends via the `ProviderRegistry`. Available providers: `faster_whisper` (CTranslate2-accelerated Whisper) for transcription and `nllb_ctranslate2` (Facebook NLLB-200 via CTranslate2) for translation. Providers are loaded lazily in background warmup threads and shared across tenants with identical configs to avoid duplicate model copies in RAM.
 
 **Queue dedup.**
 `_next_payload()` peeks ahead in the queue and drops superseded duplicates of the same `(tenant_id, chunk_id)` (with proper `task_done()` accounting) so only the most recent version of an extending chunk gets transcribed.
@@ -76,7 +76,7 @@ All API endpoints now require JWT authentication. The app requires `JWT_SECRET_K
 All endpoints are available under `/swagger`.
 
 | Method | Path | Purpose |
-|---|---|---|
+| --- | --- | --- |
 | `POST` | `/session` | Mint a tenant UUID for a source (`mic`/`file`/`url`/`stdin`/`youtube`) — returns `201 Created` |
 | `POST` | `/transcripts` | Submit a base64 audio chunk for async processing — returns `202 Accepted` |
 | `GET` | `/transcripts` | All transcripts in `[from, until]` |
@@ -96,7 +96,7 @@ The previous RPC-style paths still work for one release but are hidden from
 Swagger and log a deprecation warning. Migrate to the REST paths above.
 
 | Deprecated | Replacement |
-|---|---|
+| --- | --- |
 | `POST /transcribe` (200) | `POST /transcripts` (202) |
 | `GET /list_transcripts` | `GET /transcripts` |
 | `GET /transcripts_size` | `GET /transcripts/count` |

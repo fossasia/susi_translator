@@ -49,12 +49,7 @@ function toggleTranslation() {
 }
 
 function onTranscriptionModelChange() {
-    const model = document.getElementById('transcription-model').value;
-    const whisperSizeGroup = document.getElementById('whisper-size-group');
-
-    // Show model size only for local Whisper
-    const isWhisperLocal = model === 'whisper_local';
-    whisperSizeGroup.classList.toggle('hidden', !isWhisperLocal);
+    // No-op: only one transcription model available (faster_whisper)
 }
 
 function onTranslationModelChange() {
@@ -137,14 +132,13 @@ document.getElementById('config-form').addEventListener('submit', async (e) => {
 
     const sourceLang = document.getElementById('source-lang').value;
     const transcriptionModel = document.getElementById('transcription-model').value;
-    const modelSize = document.getElementById('model-size').value;
 
     const translationEnabled = document.getElementById('translation-toggle').checked;
 
-    // build transcription block
+    // build transcription block — model_size is managed server-side (defaults to medium)
     const transcriptionBlock = {
         provider_name: transcriptionModel,
-        config: { model_size: modelSize }
+        config: {}
     };
 
 

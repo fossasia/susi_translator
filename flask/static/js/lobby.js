@@ -91,6 +91,8 @@ async function submitRoom() {
     }
 
     const btn = document.getElementById('submitRoomBtn');
+    if (btn.disabled) return;
+    
     btn.disabled = true;
     btn.textContent = 'Creating…';
 

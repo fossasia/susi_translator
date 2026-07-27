@@ -17,7 +17,6 @@ flask-restx
 mkdocs
 mkdocs-bootswatch
 numpy
-openai-whisper
 pyaudio
 pybars3
 python-dotenv
