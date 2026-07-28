@@ -1,7 +1,10 @@
 import os
+import logging
 from flask_bcrypt import Bcrypt
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
+
+_log = logging.getLogger(__name__)
 
 bcrypt = Bcrypt()
 

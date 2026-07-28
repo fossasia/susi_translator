@@ -71,6 +71,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 from dotenv import load_dotenv
 
+load_dotenv()
 
 from auth.routes import auth_bp
 from auth.extensions import bcrypt, limiter
@@ -80,13 +81,9 @@ from auth.admin_panel import SecureModelView, SecureAdminIndexView
 
 from providers.registry import ProviderRegistry
 import providers.plugins 
-from dotenv import load_dotenv
 
 from audio_sources import URLSource, YouTubeSource
 
-
-# Load environment variables from .env file
-load_dotenv()
 
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s %(levelname)s: %(message)s')
 logger = logging.getLogger(__name__)
