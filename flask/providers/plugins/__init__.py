@@ -1,19 +1,17 @@
 from providers.registry import register_provider
-from .transcription_plugins.whisper_local import WhisperLocalProvider
-from .translation_plugins.nllb_local import NLLBLocalProvider
+from .transcription_plugins.faster_whisper_local import FasterWhisperLocalProvider
+from .translation_plugins.nllb_ctranslate2 import NLLBCTranslate2Provider
 
 
-# Transcription providers
+# Transcription providers — CTranslate2 optimized backend
 register_provider(
-    "whisper_local",
-    factory=lambda config: WhisperLocalProvider(config)
+    "faster_whisper",
+    factory=lambda config: FasterWhisperLocalProvider(config)
 )
 
 
-
-# Translation providers
+# Translation providers — CTranslate2 optimized backend
 register_provider(
-    "nllb_local",
-    factory=lambda config: NLLBLocalProvider(config)
+    "nllb_ctranslate2",
+    factory=lambda config: NLLBCTranslate2Provider(config)
 )
-

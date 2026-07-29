@@ -20,11 +20,19 @@ os.environ["SESSION_TTL_SECONDS"] = "7200"
 os.environ["TRANSCRIBE_AUTOSTART_WORKER"] = "false"
 os.environ["JWT_SECRET_KEY"] = "testing-secret-key-that-is-long-enough"
 os.environ["DATABASE_URL"] = "sqlite:///:memory:"
+# Disable CSRF cookie protection in tests: CSRF is a browser-level defence
+# (double-submit cookie pattern) that test clients do not implement.
+# Without this, every POST via the test client is rejected with 401 CSRFError.
+os.environ["JWT_COOKIE_CSRF_PROTECT"] = "false"
 
 
 @pytest.fixture
 def ts():
     import transcribe_server as ts_mod
+
+    # Ensure CSRF is off for all test requests — the env var is read at import
+    # time, so we also patch the live app config directly.
+    ts_mod.app.config["JWT_COOKIE_CSRF_PROTECT"] = False
 
     ts_mod.transcriptd.clear()
     with ts_mod.session_lock:
@@ -33,7 +41,7 @@ def ts():
 
     while not ts_mod.audio_stack.empty():
         try:
-            ts_mod.audio_stack.get_nowait()
+            ts_mod.audio_stack.get(block=False)
             ts_mod.audio_stack.task_done()
         except Exception:
             break

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from typing import Any, Callable, Dict, List, Optional
 
 from .base import (
@@ -26,12 +27,12 @@ _PROVIDER_FACTORIES: Dict[str, Callable[[Dict[str, Any]], BaseProvider]] = {}
 
 # Fallback used when a tenant skips configuration entirely
 _DEFAULT_TRANSCRIPTION_FALLBACK: Dict[str, Any] = {
-    "provider_name": "whisper_local",
+    "provider_name": "faster_whisper",
     "config": {},
 }
 
 _DEFAULT_TRANSLATION_FALLBACK: Dict[str, Any] = {
-    "provider_name": "nllb_local",
+    "provider_name": "nllb_ctranslate2",
     "config": {},
     "source_lang": "en",
     "target_lang": "es",
@@ -54,8 +55,18 @@ def available_providers() -> List[str]:
     return list(_PROVIDER_FACTORIES.keys())
 
 
-_shared_models: Dict[tuple, BaseProvider] = {}
+class SharedModelRef:
+    def __init__(self, instance: Optional[BaseProvider] = None):
+        self.instance = instance
+        self.refs = 0
+        self.last_used = time.time()
+
+_shared_models: Dict[tuple, SharedModelRef] = {}
 _shared_models_lock = threading.Lock()
+
+
+def _make_cache_key(provider_name: str, config: Dict[str, Any]) -> tuple:
+    return (provider_name, tuple(sorted(config.items())))
 
 
 def _get_or_create_shared_model(provider_name: str, config: Dict[str, Any]) -> BaseProvider:
@@ -63,19 +74,20 @@ def _get_or_create_shared_model(provider_name: str, config: Dict[str, Any]) -> B
     Creates and caches one on first call; subsequent calls return the same object.
     Thread-safe via double-checked locking.
     """
-    # Freeze config dict into a hashable key
-    cache_key = (provider_name, tuple(sorted(config.items())))
+    cache_key = _make_cache_key(provider_name, config)
 
     # Fast path: check without lock
-    instance = _shared_models.get(cache_key)
-    if instance is not None:
-        return instance
+    ref = _shared_models.get(cache_key)
+    if ref is not None and ref.instance is not None:
+        ref.last_used = time.time()
+        return ref.instance
 
     with _shared_models_lock:
         # Double-check inside lock
-        instance = _shared_models.get(cache_key)
-        if instance is not None:
-            return instance
+        ref = _shared_models.get(cache_key)
+        if ref is not None and ref.instance is not None:
+            ref.last_used = time.time()
+            return ref.instance
 
         factory = _PROVIDER_FACTORIES.get(provider_name)
         if factory is None:
@@ -88,7 +100,14 @@ def _get_or_create_shared_model(provider_name: str, config: Dict[str, Any]) -> B
             raise ProviderConfigError(
                 f"Provider initialization failed for '{provider_name}': {e}"
             ) from e
-        _shared_models[cache_key] = instance
+            
+        if ref is None:
+            ref = SharedModelRef(instance=instance)
+            _shared_models[cache_key] = ref
+        else:
+            ref.instance = instance
+            
+        ref.last_used = time.time()
 
         # Build a safe log key: mask api_key values so they never appear in logs.
         safe_config = {
@@ -111,6 +130,45 @@ class ProviderRegistry:
     def __init__(self):
         self._tenants: Dict[str, Dict[str, Any]] = {}
         self._lock = threading.Lock()
+        
+        threading.Thread(
+            target=self._eviction_loop,
+            name="registry-eviction-loop",
+            daemon=True
+        ).start()
+
+    def _increment_ref(self, cache_key: tuple) -> None:
+        with _shared_models_lock:
+            ref = _shared_models.get(cache_key)
+            if ref is None:
+                ref = SharedModelRef(instance=None)
+                _shared_models[cache_key] = ref
+            ref.refs += 1
+
+    def _decrement_ref(self, cache_key: tuple) -> None:
+        with _shared_models_lock:
+            ref = _shared_models.get(cache_key)
+            if ref is not None:
+                ref.refs = max(0, ref.refs - 1)
+                
+    def _eviction_loop(self) -> None:
+        while True:
+            time.sleep(60)  # Check every minute
+            now = time.time()
+            with _shared_models_lock:
+                keys_to_evict = []
+                for cache_key, ref in _shared_models.items():
+                    if ref.refs == 0 and (now - ref.last_used) > 3600:
+                        keys_to_evict.append(cache_key)
+                
+                for key in keys_to_evict:
+                    ref = _shared_models.pop(key)
+                    if ref.instance is not None:
+                        logger.info(f"[Registry] Evicting unused model {key[0]} from memory.")
+                        try:
+                            ref.instance.unload_model()
+                        except Exception as e:
+                            logger.error(f"[Registry] Error unloading model {key[0]}: {e}")
 
     def configure(
         self,
@@ -143,6 +201,15 @@ class ProviderRegistry:
 
         #performing Atomic Writes to the registry with thread lock to avoid race conditions
         with self._lock:
+            old_tenant = self._tenants.get(tenant_id)
+            if old_tenant:
+                old_t = old_tenant.get("transcription")
+                if old_t and old_t.get("provider_name"):
+                    self._decrement_ref(_make_cache_key(old_t["provider_name"], old_t.get("config", {})))
+                old_tx = old_tenant.get("translation")
+                if old_tx and old_tx.get("provider_name"):
+                    self._decrement_ref(_make_cache_key(old_tx["provider_name"], old_tx.get("config", {})))
+
             # only fall back to the caller supplied value if no owner is set yet
             existing_owner = (self._tenants.get(tenant_id) or {}).get("organizer_id")
             resolved_owner = existing_owner if existing_owner is not None else organizer_id
@@ -161,6 +228,7 @@ class ProviderRegistry:
                     "instance": None,
                     "ready": False,
                 }
+                self._increment_ref(_make_cache_key(t_name, t_config))
                 logger.info(f"[Registry] Configured transcription module '{t_name}' for tenant '{tenant_id}'")
 
             #instantiate transcription model in a background thread
@@ -188,6 +256,7 @@ class ProviderRegistry:
                     "instance": None,
                     "ready": False,
                 }
+                self._increment_ref(_make_cache_key(tx_name, tx_config))
 
                 logger.info(f"[Registry] Configured translation module '{tx_name}' for tenant '{tenant_id}'")
 
@@ -262,6 +331,21 @@ class ProviderRegistry:
                 
             return t_ready and tx_ready
 
+    def get_pipeline_error(self, tenant_id: str) -> Optional[str]:
+        """Returns the first warmup error encountered by the pipeline, if any."""
+        with self._lock:
+            tenant = self._tenants.get(tenant_id)
+            if not tenant:
+                return None
+            
+            if tenant.get("transcription") and tenant["transcription"].get("warmup_error"):
+                return f"Transcription Error: {tenant['transcription']['warmup_error']}"
+                
+            if tenant.get("translation") and tenant["translation"].get("warmup_error"):
+                return f"Translation Error: {tenant['translation']['warmup_error']}"
+                
+            return None
+
     def _resolve_instance(self, tenant_id: str, role: str) -> Optional[BaseProvider]:
         """
         Thread-safe lazy instantiation logic using the shared model singleton cache.
@@ -287,6 +371,7 @@ class ProviderRegistry:
                             "provider_name": fallback_name,
                             "config": _DEFAULT_TRANSCRIPTION_FALLBACK["config"],
                         }
+                        self._increment_ref(_make_cache_key(fallback_name, _DEFAULT_TRANSCRIPTION_FALLBACK["config"]))
                     role_entry = self._tenants[tenant_id]["transcription"]
                 elif role == "translation":
                     fallback_name = _DEFAULT_TRANSLATION_FALLBACK["provider_name"]
@@ -305,6 +390,7 @@ class ProviderRegistry:
                             "source_lang": _DEFAULT_TRANSLATION_FALLBACK["source_lang"],
                             "target_lang": _DEFAULT_TRANSLATION_FALLBACK["target_lang"],
                         }
+                        self._increment_ref(_make_cache_key(fallback_name, _DEFAULT_TRANSLATION_FALLBACK["config"]))
                     role_entry = self._tenants[tenant_id]["translation"]
                 else:
                     return None
@@ -331,10 +417,16 @@ class ProviderRegistry:
             with self._lock:
                 if tenant_id in self._tenants and self._tenants[tenant_id].get(role):
                     self._tenants[tenant_id][role]["ready"] = True
+                    self._tenants[tenant_id][role].pop("warmup_error", None)
 
             logger.info(f"[Registry] Warmup complete for [{role}] provider '{provider.provider_name}' tenant '{tenant_id}'")
         except Exception as e:
             logger.error(f"[Registry] Warmup failed for [{role}] tenant '{tenant_id}': {e}")
+            # Surface the failure so /status can return a meaningful error instead of
+            # leaving the slot stuck in a permanent warming_up state.
+            with self._lock:
+                if tenant_id in self._tenants and self._tenants[tenant_id].get(role):
+                    self._tenants[tenant_id][role]["warmup_error"] = str(e)
 
 
 
@@ -395,6 +487,12 @@ class ProviderRegistry:
         with self._lock:
             removed = self._tenants.pop(tenant_id, None)
             if removed:
+                old_t = removed.get("transcription")
+                if old_t and old_t.get("provider_name"):
+                    self._decrement_ref(_make_cache_key(old_t["provider_name"], old_t.get("config", {})))
+                old_tx = removed.get("translation")
+                if old_tx and old_tx.get("provider_name"):
+                    self._decrement_ref(_make_cache_key(old_tx["provider_name"], old_tx.get("config", {})))
                 logger.info(f"Evicted active pipeline allocations from memory for tenant '{tenant_id}'")
 
     def get_provider_name(self, tenant_id: str, role: str = "transcription") -> Optional[str]:
