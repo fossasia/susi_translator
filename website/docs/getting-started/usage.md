@@ -34,7 +34,7 @@ SUSI uses Flask-Migrate (Alembic) and SQLAlchemy. To initialize your database sc
 uv run flask db upgrade
 ```
 
-This will create a `translations.db` (SQLite) by default, generating the `Organizer`, `Room`, and `TokenBlocklist` tables.
+This will create a `susi.db` (SQLite) by default, generating the `Organizer`, `Room`, and `TokenBlocklist` tables.
 
 ## 3. Running the Server
 
@@ -42,17 +42,14 @@ To start the server, use the `uv` tool to execute the entrypoint script:
 
 ```bash
 cd flask
-uv run python run.py
+uv run python transcribe_server.py
 ```
 
-### Why not Gunicorn?
+### Production Deployment
 
-For local development, `run.py` launches the Werkzeug development server. Because we rely on `simple-websocket` for bidirectional streaming, running behind a WSGI server like Gunicorn requires specific worker classes (like Eventlet or Gevent).
-
-If deploying to production, you must use a WebSocket-compatible WSGI server setup. For example:
+For production, the backend is designed to run natively behind Gunicorn. We provide a Docker Compose configuration that orchestrates this automatically:
 
 ```bash
-gunicorn --worker-class eventlet -w 1 run:app
+cd flask
+docker compose up -d --build
 ```
-
-_(Note: Because the backend relies on an in-memory `threading.Lock` for `transcripts_lock`, you must currently restrict it to a single worker `-w 1` or implement Redis Pub/Sub for multi-worker scaling)._

@@ -29,18 +29,24 @@ This endpoint provides a RESTful way for the frontend to poll for task completio
 
 ```json
 {
-  "status": "processing",
-  "progress": 45.5,
-  "message": "Transcribing audio chunks..."
+  "status": "warming_up"
 }
 ```
 
-_Or, if completed:_
+_If models have fully loaded into memory:_
 
 ```json
 {
-  "status": "completed",
-  "download_url": "/api/v1/audio/export/tenant_id"
+  "status": "ready"
+}
+```
+
+_If a model failed to load (e.g. out of memory):_
+
+```json
+{
+  "status": "failed",
+  "message": "Translation Error: CUDA out of memory."
 }
 ```
 

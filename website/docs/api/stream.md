@@ -22,7 +22,7 @@ This is the standard, unidirectional Server-Sent Events endpoint.
 | `tenant_id`     | Yes      | The room UUID to join.                                                         |
 | `target_lang`   | No       | Target translation language (e.g., `es`). If `original`, it skips translation. |
 | `last_chunk_id` | No       | Integer for resumption. Defaults to 0.                                         |
-| `wants_audio`   | No       | If true, the server will trigger TTS generation and send `audio_b64` payloads. |
+| `audio`         | No       | If true, the server will trigger TTS generation and send `audio_b64` payloads. |
 
 ---
 
@@ -57,7 +57,7 @@ Both SSE and WebSockets emit identical JSON payload structures. (WebSockets use 
 }
 ```
 
-### TTS Payload (If `wants_audio=true`)
+### TTS Payload (If `audio=true`)
 
 When a translated sentence boundary is reached, the async TTS worker (`SizeBoundedTTSCache`) intercepts it and attaches audio:
 

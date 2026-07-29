@@ -18,15 +18,21 @@ In live environments, an organizer might realize the default translation engine 
 
 - **Method**: `POST`
 - **Content-Type**: `application/json`
-- **Authentication**: JWT Bearer Token (`@organizer_required`)
+- **Authentication**: JWT HTTP-Only Cookie (`@organizer_required`)
 
 ### Payload Schema
 
 ```json
 {
   "tenant_id": "string (UUID)",
-  "transcription": "whisper | google | azure",
-  "translation": "deepl | google",
+  "transcription": {
+    "provider_name": "faster_whisper",
+    "config": {}
+  },
+  "translation": {
+    "provider_name": "nllb_ctranslate2",
+    "config": {}
+  },
   "source_lang": "en",
   "target_lang": "es",
   "stream_url": "optional string",
