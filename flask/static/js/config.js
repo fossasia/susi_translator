@@ -227,6 +227,13 @@ document.getElementById('config-form').addEventListener('submit', async (e) => {
                         setTimeout(() => {
                             window.location.replace(`/stream/${TENANT_ID}?url=${encodeURIComponent(streamUrl)}&type=${streamType}`);
                         }, 500);
+                    } else if (statusData.status === 'failed') {
+                        // 4. Grabber crashed — stop polling and show a clear error.
+                        clearInterval(pollInterval);
+                        loadingOverlay.classList.add('hidden');
+                        submitBtn.disabled = false;
+                        const reason = statusData.message || "The audio grabber failed to start.";
+                        alert(`Stream Error\n\n${reason}`);
                     }
                 } catch (err) {
                     console.error("Polling error", err);

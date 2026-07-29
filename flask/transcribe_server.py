@@ -2,8 +2,8 @@ from flask import Flask, request, jsonify, abort, Response, redirect, url_for, r
 from flask_restx import Api, Resource, fields
 from flask_cors import CORS
 from flask_jwt_extended import JWTManager, verify_jwt_in_request, get_jwt
-from flask_bcrypt import Bcrypt
 from flask_sock import Sock
+from flask_talisman import Talisman
 from werkzeug.exceptions import HTTPException
 import numpy as np
 import threading
@@ -28,7 +28,8 @@ from datetime import timedelta
 from dotenv import load_dotenv
 
 
-from auth.routes import auth_bp, bcrypt
+from auth.routes import auth_bp
+from auth.extensions import bcrypt, limiter
 from auth.decorators import organizer_required
 from flask_admin import Admin
 from auth.admin_panel import SecureModelView, SecureAdminIndexView
@@ -94,6 +95,8 @@ def _env_csv(name: str, default: str) -> list:
     return [item.strip() for item in raw.split(",") if item.strip()]
 
 app = Flask(__name__)
+# Nginx handles SSL termination, so we don't want Flask redirecting HTTP to HTTPS
+Talisman(app, content_security_policy=None, force_https=False)
 sock = Sock(app)
 api = Api(app, version='1.0', title='Transcription API',
           description='A simple Transcription API', doc='/swagger',
@@ -116,7 +119,10 @@ stream_connections = {}
 stream_connections_lock = threading.Lock()
 
 # Database, Auth, JWT 
-app.config["SQLALCHEMY_DATABASE_URI"] = os.getenv("DATABASE_URL", "sqlite:///susi.db")
+_db_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "instance")
+os.makedirs(_db_dir, exist_ok=True)
+_db_path = os.path.join(_db_dir, "susi.db")
+app.config["SQLALCHEMY_DATABASE_URI"] = os.getenv("DATABASE_URL", f"sqlite:///{_db_path}")
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 app.config["JWT_SECRET_KEY"] = _require_secret_key("JWT_SECRET_KEY")
 app.secret_key = app.config["JWT_SECRET_KEY"]
@@ -159,12 +165,49 @@ def check_if_token_revoked(jwt_header, jwt_payload: dict) -> bool:
         token = db.session.query(TokenBlocklist.id).filter_by(jti=jti).scalar()
     return token is not None
 bcrypt.init_app(app)
-
-from auth.extensions import limiter
 limiter.init_app(app)
 
 # register auth
 app.register_blueprint(auth_bp)
+
+@app.errorhandler(429)
+def handle_ratelimit(e):
+    """Return a friendly JSON message when a client exceeds a rate limit"""
+
+    limit_info = getattr(e, "description", "the request limit")
+    retry_after = None
+    try:
+        retry_after = e.retry_after
+    except AttributeError:
+        pass
+    response_body = {
+        "status": "rate_limited",
+        "message": (
+            f"Whoa, slow down! \U0001f6a6 You've reached {limit_info}. "
+            "Please wait a moment and try again."
+        ),
+    }
+    if retry_after is not None:
+        response_body["retry_after_seconds"] = int(retry_after)
+    return jsonify(response_body), 429
+
+
+@app.errorhandler(Exception)
+def handle_global_exception(e):
+    logger.error(f"Unhandled Exception: {e}", exc_info=True)
+    
+    # Handle werkzeug HTTPExceptions by preserving their status code
+    if isinstance(e, HTTPException):
+        return jsonify({
+            "status": "error",
+            "message": e.description or str(e)
+        }), e.code
+        
+    return jsonify({
+        "status": "error",
+        "message": "An internal server error occurred."
+    }), 500
+
 
 # Flask-Admin
 from flask_admin.theme import Bootstrap4Theme
@@ -181,6 +224,8 @@ transcripts_lock = threading.Lock()
 
 # Background audio grabber subprocesses, keyed by tenant_id.
 grabber_processes = {}
+_grabber_failure_logged: set = set()  # tenant_ids whose crash has already been logged
+
  
 grabber_lock = threading.Lock()
 
@@ -191,11 +236,12 @@ latest_session_by_source = {s: None for s in VALID_SOURCES}
 session_lock = threading.Lock()
 SESSION_TTL_SECONDS = int(os.getenv('SESSION_TTL_SECONDS', '7200'))
 
-#TTS 
+#TTS
 _supertonic_tts = None
 _tts_lock = threading.Lock()
 tts_inference_lock = threading.Lock()
 tts_executor = ThreadPoolExecutor(max_workers=1)
+translation_executor = ThreadPoolExecutor(max_workers=1)
 class SizeBoundedTTSCache:
     def __init__(self, max_size_bytes=50 * 1024 * 1024):
         self.cache = OrderedDict()
@@ -313,17 +359,18 @@ def generate_tts_sync(text, target_lang, voice_name=None):
         tts_engine = get_tts_engine()
         style_name = resolve_tts_voice(target_lang, voice_name)
         voice_style = tts_engine.get_voice_style(voice_name=style_name)
-        
-        with tts_inference_lock:
-            wav, duration = tts_engine.synthesize(
-                text=text, 
-                lang=lang_tag, 
-                voice_style=voice_style,
-                total_steps=8,  # Default medium quality
-                speed=1.0
-            )
-        
-        # Supertonic outputs a numpy array. Convert to 16-bit PCM WAV.
+        try:
+            with tts_inference_lock:
+                wav, duration = tts_engine.synthesize(
+                    text=text, 
+                    lang=lang_tag, 
+                    voice_style=voice_style,
+                    total_steps=8,  # Default medium quality
+                    speed=1.0
+                )
+        except Exception as e:
+            logger.error(f"Synthesis failed: {e}")
+            raise
         buf = io.BytesIO()
         sample_rate = getattr(tts_engine, 'sample_rate', 44100)
         sf.write(buf, wav.squeeze(), sample_rate, format='WAV', subtype='PCM_16')
@@ -341,6 +388,14 @@ def _async_generate_tts(text, target_lang, voice_name, cache_key, chunk_id=None,
             # A newer request for this chunk is queued. Skip this obsolete one!
             tts_cache.pop(cache_key, None)
             return
+
+    # Transcription has higher priority than TTS.
+    # Wait up to 4 seconds for pending audio chunks to drain before starting
+    # synthesis. This prevents TTS from competing with Whisper for CPU cycles
+    # when there is still audio waiting to be transcribed.
+    deadline = time.time() + 4.0
+    while audio_stack.qsize() > 0 and time.time() < deadline:
+        time.sleep(0.2)
 
     try:
         audio_b64 = generate_tts_sync(text, target_lang, voice_name)
@@ -463,7 +518,13 @@ def _next_payload():
         if current_size >= _MAX_SKIP_BYTES:
             return tenant_id, chunk_id, audiob64
 
-        with audio_stack.mutex:
+        if hasattr(audio_stack, "mutex"):
+            with audio_stack.mutex:
+                has_newer = any(
+                    t == tenant_id and c == chunk_id
+                    for (t, c, _) in audio_stack.queue
+                )
+        else:
             has_newer = any(
                 t == tenant_id and c == chunk_id
                 for (t, c, _) in audio_stack.queue
@@ -510,8 +571,9 @@ def process_audio():
                     if current_transcript:
                         # buffer for the same chunk, so overwrite rather than concatenate.
                         current_transcript['transcript'] = transcript
+                        current_transcript['last_update'] = time.time()
                     else:
-                        transcripts[chunk_id] = {'transcript': transcript}
+                        transcripts[chunk_id] = {'transcript': transcript, 'last_update': time.time()}
             else:
                 logger.warning(f"INVALID transcript for chunk_id {chunk_id}: {transcript}")
 
@@ -806,6 +868,8 @@ def _kill_grabber(proc, tenant_id: str) -> None:
         logger.info(f"Stopped grabber for tenant {tenant_id}")
     except Exception as e:
         logger.error(f"Error stopping grabber for {tenant_id}: {e}")
+    finally:
+        _grabber_failure_logged.discard(tenant_id)
 
 
 def cleanup_grabbers():
@@ -975,6 +1039,7 @@ def allowed_file(filename):
 
 @app.route('/api/v1/translate/upload_file', methods=['POST'])
 @organizer_required
+@limiter.limit("10 per minute")
 def upload_file():
     #Check Content-Length for size limit
     if request.content_length and request.content_length > MAX_UPLOAD_SIZE:
@@ -1033,6 +1098,7 @@ def serve_audio_file(tenant_id):
 #Provider configuration endpoint
 @app.route('/api/v1/translate/configure', methods=['POST'])
 @organizer_required
+@limiter.limit("10 per minute")
 def configure_provider():
     """
     Configure transcription and/or translation providers for a tenant
@@ -1138,9 +1204,7 @@ def configure_provider():
                 cmd.append("--realtime")
             elif stream_type in ("url", "youtube"):
                 cmd.extend(["--url", stream_url])
-            # Pass the auth token via environment variable
-            # Explicitly construct a minimal environment to avoid leaking
-            # sensitive parent vars to the subprocess.
+
             safe_env_keys = {"PATH", "LANG", "LC_ALL", "USER", "HOME", "PYTHONPATH", "VIRTUAL_ENV"}
             grabber_env = {k: os.environ[k] for k in safe_env_keys if k in os.environ}
             grabber_env["GRABBER_AUTH_TOKEN"] = internal_token
@@ -1222,6 +1286,11 @@ def _stream_caption_events(
     last_translation_time = 0.0
     sent_audio = {}
     loop_counter = 0
+    pending_translations = {}
+    # Track when each chunk's text last changed 
+    chunk_last_text = {}     
+    chunk_stable_since = {}  
+    TEXT_STABLE_SECS = 2.0    
 
     while True:
         loop_counter += 1
@@ -1236,39 +1305,87 @@ def _stream_caption_events(
             tenant_transcripts = dict(transcriptd.get(tenant_id, {}))
 
         now = time.time()
-        # Default throttle interval
-        throttle_interval = 0.0
-        can_translate = (now - last_translation_time) >= throttle_interval
+        # No global throttle — translations are already gated to finalized chunks only
+        can_translate = True
 
         events_to_send = []
 
-        for cid in _numeric_sorted_keys(tenant_transcripts):
+        sorted_cids = _numeric_sorted_keys(tenant_transcripts)
+        max_cid = sorted_cids[-1] if sorted_cids else None
+
+        for cid in sorted_cids:
             cid_int = _chunk_id_int(cid)
             if cid_int >= last_chunk_id:
                 text = tenant_transcripts[cid]['transcript']
+                is_final = (cid != max_cid)
+
+                if chunk_last_text.get(cid) != text:
+                    chunk_last_text[cid] = text
+                    chunk_stable_since[cid] = now
+                    
+                    if cid in pending_translations:
+                        old_fut, _ = pending_translations.pop(cid)
+                        old_fut.cancel()  
+
+                text_is_stable = (now - chunk_stable_since.get(cid, now)) >= TEXT_STABLE_SECS
 
                 needs_tx_update = sent_transcripts.get(cid) != text
-                needs_tl_update = target_lang and (translated_transcripts.get(cid) != text)
+                # Only translate finalized chunks whose text has been stable long enough.
+                needs_tl_update = (
+                    target_lang
+                    and is_final
+                    and text_is_stable
+                    and (translated_transcripts.get(cid) != text)
+                )
 
                 translation = last_translations.get(cid, "")
+                newly_translated = False
 
-                if needs_tl_update and can_translate:
+                # Check if a previously submitted async translation is done
+                pending = pending_translations.get(cid)
+                if pending is not None:
+                    fut, pending_text = pending
+                    if fut.done():
+                        del pending_translations[cid]
+                        try:
+                            new_tl = fut.result()
+                            if pending_text != text:
+                                logger.debug(
+                                    f"[TTS] Discarding stale translation for chunk {cid}: "
+                                    f"text changed since submission (was {len(pending_text)}c, "
+                                    f"now {len(text)}c)"
+                                )
+                                # Do NOT set newly_translated — discard this result entirely
+                            elif new_tl:
+                                translation = new_tl
+                                last_translations[cid] = translation
+                                translated_transcripts[cid] = pending_text
+                                last_translation_time = time.time()
+                                needs_tl_update = False  # Already translated
+                                newly_translated = True
+                        except Exception as e:
+                            logger.error(f"Async translation error for {tenant_id}/{cid}: {e}")
+
+                # Submit a new async translation if needed and no pending one
+                if needs_tl_update and can_translate and cid not in pending_translations:
                     try:
                         lang_config = registry.get_language_config(tenant_id)
                         source_lang = lang_config.get('source_lang', 'en')
-                        new_tl = registry.translate(tenant_id, text, source_lang, target_lang)
-                        if new_tl:
-                            translation = new_tl
-                        last_translations[cid] = translation
-                        translated_transcripts[cid] = text
-                        last_translation_time = time.time()
-                        can_translate = False  # Only 1 translation per loop to spread load
+                        # Capture values for the closure
+                        _text, _src, _tgt = text, source_lang, target_lang
+                        fut = translation_executor.submit(
+                            registry.translate, tenant_id, _text, _src, _tgt
+                        )
+                        pending_translations[cid] = (fut, text)
+                        can_translate = False  # Only 1 submission per loop
                     except Exception as e:
-                        logger.error(f"Stream translation error for {tenant_id}: {e}")
+                        logger.error(f"Stream translation submit error for {tenant_id}: {e}")
 
-                is_ready_update = needs_tx_update or (needs_tl_update and translated_transcripts.get(cid) == text)
-                
-                tts_text = translation if target_lang else text
+                # Send transcript updates in real time.
+                # Send translation update only when it *just* arrived (newly_translated).
+                # This prevents sending the same translation text on every loop iteration.
+                is_ready_update = needs_tx_update or newly_translated
+
                 needs_audio_update = False
                 audio_b64 = None
 
@@ -1304,9 +1421,11 @@ def _stream_caption_events(
                     payload = {
                         "chunk_id": cid,
                         "transcript": text,
-                        "translation": translation,
+                        # Only include translation in the payload when it has been finalized.
+                        # For in-progress chunks, omit it so the UI keeps the previous translation visible.
+                        "translation": translation if (is_final or not target_lang) else "",
                     }
-                    
+
                     if needs_audio_update and audio_b64:
                         payload["audio_b64"] = audio_b64
                         sent_audio[cid] = (tts_text, requested_voice)
@@ -1517,6 +1636,7 @@ sock.route('/ws/v1/translate/stream')(_translate_stream_ws_handler)
 
 @app.route('/api/v1/translate/rooms', methods=['GET'])
 @organizer_required
+@limiter.limit("30 per minute")
 def get_rooms():
     from flask_jwt_extended import get_jwt_identity
     from auth.models import Organizer, Room
@@ -1542,6 +1662,7 @@ def get_rooms():
 
 @app.route('/stop_event/<tenant_id>', methods=['POST'])
 @organizer_required
+@limiter.limit("10 per minute")
 def stop_event(tenant_id):
     """
     Kills the background audio grabber, releases provider slots, and
@@ -1603,6 +1724,7 @@ def internal_token_refresh():
 
 @app.route('/api/v1/translate/status/<tenant_id>', methods=['GET'])
 @organizer_required
+@limiter.exempt
 def provider_status(tenant_id):
     """
     Check whether the models for a given tenant are fully loaded and ready.
@@ -1610,8 +1732,36 @@ def provider_status(tenant_id):
     """
     _assert_tenant_ownership(tenant_id)
 
+    with grabber_lock:
+        proc = grabber_processes.get(tenant_id)
+    if proc is not None:
+        exit_code = proc.poll()
+        if exit_code is not None and exit_code != 0:
+            if tenant_id not in _grabber_failure_logged:
+                _grabber_failure_logged.add(tenant_id)
+                logger.error(
+                    f"[status] Grabber for tenant {tenant_id} exited with code {exit_code}. "
+                    "Likely cause: yt-dlp could not fetch the stream URL (stream offline, "
+                    "unsupported platform, or region-blocked)."
+                )
+            else:
+                logger.debug(
+                    f"[status] Grabber for tenant {tenant_id} still exited (code {exit_code}), "
+                    "already reported."
+                )
+            return jsonify({
+                "status": "failed",
+                "message": (
+                    "The audio grabber crashed before it could start. "
+                    "The stream may be offline, the URL may be unsupported, "
+                    "or the platform may require authentication. "
+                    "Please check your stream URL and try again."
+                ),
+            }), 200
+
     if registry.is_pipeline_ready(tenant_id):
         return jsonify({"status": "ready"}), 200
+
     return jsonify({"status": "warming_up"}), 200
 
 
@@ -1906,6 +2056,12 @@ def redirect_root():
     """Intercept bare root URL and redirect to home."""
     if request.path == "/":
         return redirect(url_for("home"))
+
+
+@app.route('/favicon.ico')
+def favicon():
+    """Return empty 204 for favicon requests to suppress 404 log spam."""
+    return '', 204
 
 
 @app.route("/home")

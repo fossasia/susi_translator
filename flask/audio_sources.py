@@ -457,12 +457,14 @@ class YouTubeSource(AudioSource):
         try:
             url_output = subprocess.check_output(
                 ydl_argv,
-                stderr=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
                 text=True,
                 shell=False
             )
         except subprocess.CalledProcessError as exc:
-            raise RuntimeError(f"yt-dlp failed to get URL: {exc}")
+            stderr_msg = (exc.stderr or "").strip()
+            detail = f": {stderr_msg}" if stderr_msg else ""
+            raise RuntimeError(f"yt-dlp failed to get URL{detail}")
 
         lines = [line.strip() for line in url_output.splitlines() if line.strip()]
         if not lines:

@@ -1,7 +1,6 @@
 from __future__ import annotations
 import logging
 from flask import Blueprint, request, jsonify, render_template
-from flask_bcrypt import Bcrypt
 from flask_jwt_extended import (
     create_access_token,
     jwt_required,
@@ -12,12 +11,11 @@ from flask_jwt_extended import (
 )
 from sqlalchemy.exc import SQLAlchemyError
 from .models import db, Organizer
-from .extensions import limiter
+from .extensions import bcrypt, limiter
 
 logger = logging.getLogger(__name__)
 
 auth_bp = Blueprint("auth", __name__, url_prefix="/auth")
-bcrypt = Bcrypt()
 
 
 # Page routes
@@ -98,6 +96,7 @@ def login():
 
 @auth_bp.route("/api/logout", methods=["POST"])
 @jwt_required()
+@limiter.limit("10 per minute")
 def logout():
     jti = get_jwt()["jti"]
     from .models import TokenBlocklist
@@ -116,6 +115,7 @@ def logout():
 
 @auth_bp.route("/api/me", methods=["GET"])
 @jwt_required()
+@limiter.limit("30 per minute")
 def me():
     """Return the current authenticated organizer's profile."""
     email = get_jwt_identity()
@@ -134,6 +134,7 @@ def me():
 
 @auth_bp.route("/api/status", methods=["GET"])
 @jwt_required(optional=True)
+@limiter.limit("30 per minute")
 def status():
     
     email = get_jwt_identity()

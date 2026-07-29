@@ -6,6 +6,7 @@ Meta NLLB-200 via HF transformers loaded into RAM
 from __future__ import annotations
 
 import logging
+import threading
 from typing import Any, Optional
 
 from providers.base import TranslationProvider, TranslationError, ProviderConfigError
@@ -51,6 +52,7 @@ class NLLBLocalProvider(TranslationProvider):
         self._device_config = self.config.get("device", None)
         self._num_beams = int(self.config.get("num_beams", 1))
         self.device = "cpu"  # Set dynamically
+        self._load_lock = threading.Lock()  # Prevents simultaneous loads by multiple threads
 
     @property
     def provider_name(self) -> str:
@@ -67,34 +69,54 @@ class NLLBLocalProvider(TranslationProvider):
 
     def load_model(self):
         """
-        Loads the NLLB tokenizer and model into RAM
-        auto hardware detection with safe fallback to CPU 
+        Loads the NLLB tokenizer and model into RAM.
+        Thread-safe: uses a lock so parallel calls don't double-load the 1.2GB model.
+        auto hardware detection with safe fallback to CPU
         """
-        import torch
-        from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
-
+        # Fast path: already loaded, no lock needed
         if self._model is not None and self._tokenizer is not None:
             logger.info(f"[{self.provider_name}] Model '{self._model_id}' already loaded in memory.")
             return
 
-        # Device hardware detection and safety fallback
-        self.device = self._device_config or ("cuda" if torch.cuda.is_available() else "cpu")
-        
-        if self.device == "cuda" and not torch.cuda.is_available():
-            logger.warning(
-                f"[{self.provider_name}] CUDA requested, but no GPU available. "
-                "Safely falling back to CPU."
-            )
-            self.device = "cpu"
+        with self._load_lock:
+            # Re-check inside the lock in case another thread loaded it while we waited
+            if self._model is not None and self._tokenizer is not None:
+                return
 
-        logger.info(f"[{self.provider_name}] Loading '{self._model_id}' on '{self.device}'...")
-        
-        try:
-            self._tokenizer = AutoTokenizer.from_pretrained(self._model_id)
-            self._model = AutoModelForSeq2SeqLM.from_pretrained(self._model_id).to(self.device)
-            logger.info(f"[{self.provider_name}] Model '{self._model_id}' loaded successfully.")
-        except Exception as e:
-            raise ProviderConfigError(f"[{self.provider_name}] Failed to load NLLB model: {e}")
+            import torch
+            from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
+
+            # Device hardware detection and safety fallback
+            self.device = self._device_config or ("cuda" if torch.cuda.is_available() else "cpu")
+
+            if self.device == "cuda" and not torch.cuda.is_available():
+                logger.warning(
+                    f"[{self.provider_name}] CUDA requested, but no GPU available. "
+                    "Safely falling back to CPU."
+                )
+                self.device = "cpu"
+
+            logger.info(f"[{self.provider_name}] Loading '{self._model_id}' on '{self.device}'...")
+
+            try:
+                # Use local_files_only=True to avoid hitting HuggingFace network on every boot
+                # when the model is already cached in the volume.
+                try:
+                    self._tokenizer = AutoTokenizer.from_pretrained(
+                        self._model_id, local_files_only=True
+                    )
+                    self._model = AutoModelForSeq2SeqLM.from_pretrained(
+                        self._model_id, local_files_only=True
+                    ).to(self.device)
+                except OSError:
+                    # Model not in cache yet — fall back to downloading it
+                    logger.info(f"[{self.provider_name}] Model not in local cache, downloading...")
+                    self._tokenizer = AutoTokenizer.from_pretrained(self._model_id)
+                    self._model = AutoModelForSeq2SeqLM.from_pretrained(self._model_id).to(self.device)
+
+                logger.info(f"[{self.provider_name}] Model '{self._model_id}' loaded successfully.")
+            except Exception as e:
+                raise ProviderConfigError(f"[{self.provider_name}] Failed to load NLLB model: {e}")
 
     def translate(
         self, 
