@@ -331,6 +331,21 @@ class ProviderRegistry:
                 
             return t_ready and tx_ready
 
+    def get_pipeline_error(self, tenant_id: str) -> Optional[str]:
+        """Returns the first warmup error encountered by the pipeline, if any."""
+        with self._lock:
+            tenant = self._tenants.get(tenant_id)
+            if not tenant:
+                return None
+            
+            if tenant.get("transcription") and tenant["transcription"].get("warmup_error"):
+                return f"Transcription Error: {tenant['transcription']['warmup_error']}"
+                
+            if tenant.get("translation") and tenant["translation"].get("warmup_error"):
+                return f"Translation Error: {tenant['translation']['warmup_error']}"
+                
+            return None
+
     def _resolve_instance(self, tenant_id: str, role: str) -> Optional[BaseProvider]:
         """
         Thread-safe lazy instantiation logic using the shared model singleton cache.

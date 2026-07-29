@@ -9,6 +9,7 @@ import logging
 import os
 import threading
 from typing import Any, Optional
+from filelock import FileLock
 
 from providers.base import TranslationProvider, TranslationError, ProviderConfigError
 
@@ -58,13 +59,17 @@ def _get_ct2_model_path(model_id: str) -> str:
     )
 
     try:
-        from ctranslate2.converters import TransformersConverter
-        converter = TransformersConverter(
-            model_name_or_path=model_id,
-            low_cpu_mem_usage=True,
-        )
-        converter.convert(cache_dir, quantization="int8", force=True)
-        logger.info(f"[nllb_ctranslate2] Conversion complete. Model saved to '{cache_dir}'")
+        with FileLock(cache_dir + ".lock"):
+            if os.path.exists(marker):
+                return cache_dir
+            
+            from ctranslate2.converters import TransformersConverter
+            converter = TransformersConverter(
+                model_name_or_path=model_id,
+                low_cpu_mem_usage=True,
+            )
+            converter.convert(cache_dir, quantization="int8", force=True)
+            logger.info(f"[nllb_ctranslate2] Conversion complete. Model saved to '{cache_dir}'")
     except Exception as e:
         raise ProviderConfigError(
             f"[nllb_ctranslate2] Failed to convert model '{model_id}' to CTranslate2 format: {e}"

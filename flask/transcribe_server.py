@@ -1834,6 +1834,13 @@ def provider_status(tenant_id):
                 ),
             }), 200
 
+    warmup_err = registry.get_pipeline_error(tenant_id)
+    if warmup_err:
+        return jsonify({
+            "status": "failed",
+            "message": warmup_err
+        }), 200
+
     if registry.is_pipeline_ready(tenant_id):
         return jsonify({"status": "ready"}), 200
 
